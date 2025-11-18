@@ -1,65 +1,99 @@
-    // ---------- 3. スカスカ領域に「ランダムな塊」でカオス生成 ----------
-    int aliveCount = 0;
-    for (int y = 0; y < rows; ++y) {
-        for (int x = 0; x < cols; ++x) {
-            if (moved[y][x] == 1) aliveCount++;
-        }
+    // === 一日の時間管理（背景用） ===
+    float dayTime;      // 経過時間（秒）
+    float dayLength;    // 1周にかかる時間（秒） 例: 60秒で夜明け〜夜まで一周
+
+    // 背景描画
+    void drawBackground();
+
+
+
+    // === 一日の時間（背景用） ===
+    dayTime   = 0.0f;
+    dayLength = 60.0f; // 60秒で朝→昼→夕→夜→朝を一周
+
+    // === 一日の時間を進める ===
+    dayTime += dt;
+    if (dayTime > dayLength) {
+        dayTime -= dayLength; // ループさせる
     }
 
-    int totalCells = rows * cols;
-    int minAlive   = static_cast<int>(totalCells * 0.02f); // 2% 以下ならほぼ壊滅
 
-    if (aliveCount < minAlive) {
-        // クラスター数もランダム
-        int clusterCount = static_cast<int>(ofRandom(2, 7)); // 2〜6個
 
-        float t = ofGetElapsedTimef();
 
-        for (int c = 0; c < clusterCount; ++c) {
+void ofApp::draw() {
+    drawBackground();  // ★ 先に空・背景を描く
+    drawCA();          // 天気アイコン
+    drawCloudCA();     // 雲レイヤー
+}
 
-            // クラスター中心をランダムに
-            int cx = static_cast<int>(ofRandom(cols));
-            int cy = static_cast<int>(ofRandom(rows));
 
-            // 半径もクラスターごとにランダム 2〜5
-            int radius = static_cast<int>(ofRandom(2, 6));
 
-            for (int dy = -radius; dy <= radius; ++dy) {
-                for (int dx = -radius; dx <= radius; ++dx) {
+//--------------------------------------------------------------
+void ofApp::drawBackground() {
 
-                    int tx = (cx + dx + cols) % cols;
-                    int ty = (cy + dy + rows) % rows;
-
-                    // 距離が radius 以内だけ候補
-                    float dist2 = dx * dx + dy * dy;
-                    if (dist2 > radius * radius) continue;
-
-                    float dist = sqrtf(dist2);
-
-                    // 中心に近いほど「生まれやすい」
-                    float baseProb = ofMap(dist,
-                                           0.0f, (float)radius,
-                                           1.0f, 0.3f, true);
-
-                    // さらにノイズでバラつき（塊の形を崩す）
-                    float noiseVal = ofNoise(tx * 0.2f, ty * 0.2f, t * 0.8f);
-                    float noiseFactor = ofMap(noiseVal, 0.0f, 1.0f,
-                                              0.6f, 1.4f, true);
-
-                    float spawnProb = baseProb * noiseFactor;
-
-                    if (ofRandom(1.0f) < spawnProb) {
-                        moved[ty][tx] = 1;
-
-                        // HP は 2〜maxHP のどこか（強めの勢力として出現）
-                        int seedHP = static_cast<int>(ofRandom(2, maxHP + 1));
-                        newHP[ty][tx] = std::max(newHP[ty][tx], seedHP);
-                    }
-                }
-            }
-        }
+    // dayTime -> 0〜1 のフェーズにする
+    float phase = 0.0f;
+    if (dayLength > 0.0f) {
+        phase = fmodf(dayTime / dayLength, 1.0f);
+        if (phase < 0.0f) phase += 1.0f;
     }
 
-    // ---------- 4. 確定 ----------
-    ca   = moved;
-    caHP = newHP;
+    // 時間帯ごとのベース色（上と下）
+    ofColor top, bottom;
+
+    if (phase < 0.20f) {
+        // 夜（0.00〜0.20）
+        float t = phase / 0.20f; // 0→1
+        top    = ofColor::fromHsb(200, 150, 20 + 40 * t); // 濃紺→少し明るく
+        bottom = ofColor::fromHsb(210, 120, 10 + 30 * t); // ほぼ黒→紺
+    }
+    else if (phase < 0.35f) {
+        // 夜明け（0.20〜0.35）
+        float t = (phase - 0.20f) / 0.15f;
+        top    = ofColor::fromHsb(25, 180, ofLerp(40, 200, t));   // 赤みオレンジ
+        bottom = ofColor::fromHsb(200, 80,  ofLerp(30, 180, t));  // 青〜シアン
+    }
+    else if (phase < 0.75f) {
+        // 昼（0.35〜0.75）
+        float t = (phase - 0.35f) / 0.40f;
+        top    = ofColor::fromHsb(200, ofLerp(80, 40, t), 230);  // 青空
+        bottom = ofColor::fromHsb(195, ofLerp(40, 10, t), 245);  // 地平線付近は少し白っぽく
+    }
+    else {
+        // 夕方〜夜（0.75〜1.00）
+        float t = (phase - 0.75f) / 0.25f;
+        top    = ofColor::fromHsb(15, 200, ofLerp(220, 40, t));  // オレンジ→暗赤
+        bottom = ofColor::fromHsb(230, 120, ofLerp(60, 10, t));  // 紫→ほぼ黒
+    }
+
+    // === 天候による補正 ===
+    // 晴れ：そのまま
+    // 曇り・雨・雷：少し暗く＆彩度を落とす
+    // 雪：明度を少し上げる
+
+    if (currentWeather == WEATHER_CLOUDY) {
+        top    = top.getLerped(ofColor(120, 120, 140), 0.35f);
+        bottom = bottom.getLerped(ofColor(80, 80, 110), 0.35f);
+    }
+    else if (currentWeather == WEATHER_RAINY) {
+        top    = top.getLerped(ofColor(60, 80, 120), 0.45f);
+        bottom = bottom.getLerped(ofColor(30, 40, 80), 0.45f);
+    }
+    else if (currentWeather == WEATHER_THUNDERSTORM) {
+        // コントラスト強め・やや青〜紫に寄せる
+        top    = top.getLerped(ofColor(40, 40, 80), 0.5f);
+        bottom = bottom.getLerped(ofColor(10, 10, 40), 0.6f);
+    }
+    else if (currentWeather == WEATHER_SNOWY) {
+        // 明るく・少しシアン寄り
+        top    = top.getLerped(ofColor(220, 240, 255), 0.4f);
+        bottom = bottom.getLerped(ofColor(200, 230, 255), 0.4f);
+    }
+
+    // 実際に背景をグラデーションで塗る
+    ofBackgroundGradient(top, bottom, OF_GRADIENT_LINEAR);
+}
+
+
+
+
