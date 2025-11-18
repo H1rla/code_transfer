@@ -1,0 +1,86 @@
+//--------------------------------------------------------------
+// 天気 CA 更新（トーラス境界、死んだセルから雲 CA を生む）
+//
+// 「増える力」を各天候ごとの誕生確率として導入する。
+//  - ベースルールは B3 / S23（標準ライフゲーム）
+//  - ただし B3（誕生）になるときだけ、天気ごとのパーセンテージで確率判定する。
+//    晴れ: 60%, 曇り: 40%, 雨: 20%, 雪: 50%, 雷: 60%
+void ofApp::updateCA() {
+    // 天気ごとの「増える力」を 0.0〜1.0 にしたもの
+    float birthProb = 0.5f; // デフォルト
+
+    switch (currentWeather) {
+    case WEATHER_SUNNY:
+        birthProb = 0.60f;  // 晴れ：増える力 60%
+        break;
+    case WEATHER_CLOUDY:
+        birthProb = 0.40f;  // 曇り：増える力 40%
+        break;
+    case WEATHER_RAINY:
+        birthProb = 0.20f;  // 雨：増える力 20%
+        break;
+    case WEATHER_SNOWY:
+        birthProb = 0.50f;  // 雪：増える力 50%
+        break;
+    case WEATHER_THUNDERSTORM:
+        birthProb = 0.60f;  // 雷：増える力 60%
+        break;
+    default:
+        birthProb = 0.50f;
+        break;
+    }
+
+    for (int y = 0; y < caRows; y++) {
+        for (int x = 0; x < caCols; x++) {
+
+            int current = ca[y][x];
+
+            // 8近傍の生存セル数（トーラス境界）
+            int aliveNeighbors = 0;
+            for (int j = -1; j <= 1; j++) {
+                for (int i = -1; i <= 1; i++) {
+                    if (i == 0 && j == 0) continue; // 自分自身は含めない
+
+                    int nx = (x + i + caCols) % caCols;
+                    int ny = (y + j + caRows) % caRows;
+
+                    aliveNeighbors += ca[ny][nx];
+                }
+            }
+
+            int nextState = current;
+
+            // ベースは Game of Life の B3 / S23
+            if (current == 1) {
+                // 生きているセルの生存条件：周囲が 2 か 3 なら生き残る
+                if (aliveNeighbors == 2 || aliveNeighbors == 3) {
+                    nextState = 1;
+                } else {
+                    nextState = 0;
+                }
+            } else {
+                // 死んでいるセルの誕生条件：周囲が 3 のときだけ
+                if (aliveNeighbors == 3) {
+                    // ★ ここで「増える力」を誕生確率として使う
+                    float r = ofRandom(1.0f);
+                    if (r < birthProb) {
+                        nextState = 1; // 誕生
+                    } else {
+                        nextState = 0; // 誕生しない
+                    }
+                } else {
+                    nextState = 0;
+                }
+            }
+
+            // 「今まで生きていたのに次フレームで死ぬセル」から雲 CA を誕生させる
+            if (current == 1 && nextState == 0) {
+                cloudCA[y][x] = 1;
+            }
+
+            caNext[y][x] = nextState;
+        }
+    }
+
+    ca = caNext;
+}
