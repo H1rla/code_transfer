@@ -1,69 +1,75 @@
 void ofApp::draw(){
-    // ------------------------
-    // 1. カメレオン本体（緑の円）
-    // ------------------------
     ofPushStyle();
-    ofSetColor(40, 200, 100);  // 緑
+
+    // ------------------------
+    // 1. 本体（緑の円）＋白いアウトライン
+    // ------------------------
+    ofSetColor(40, 200, 100);      // 中身 緑
+    ofFill();
     ofDrawCircle(pos, radius);
-    ofPopStyle();
+
+    ofNoFill();                    // アウトライン白
+    ofSetLineWidth(2.0f);
+    ofSetColor(255);
+    ofDrawCircle(pos, radius);
 
     // ------------------------
-    // 2. 目（白い縁＋黒い瞳）×2
-    //    右上・右下にひとつずつ
+    // 2. 目（左右の白い円）＋左目の中の線
     // ------------------------
-    ofPushStyle();
+    float eyeOuterR = radius * 0.22f;
 
-    float eyeOuterR = radius * 0.22f;   // 白目
-    float eyeInnerR = radius * 0.10f;   // 黒目
+    // 目の位置：左右、少し上
+    float eyeOffsetX = radius * 0.35f;
+    float eyeOffsetY = -radius * 0.20f;
 
-    // 上の目
-    ofVec2f eyeCenterTop  = pos + ofVec2f(radius * 0.3f, -radius * 0.3f);
-    // 下の目
-    ofVec2f eyeCenterBottom = pos + ofVec2f(radius * 0.3f,  radius * 0.3f);
+    ofVec2f leftEyeCenter  = pos + ofVec2f(-eyeOffsetX, eyeOffsetY);
+    ofVec2f rightEyeCenter = pos + ofVec2f( eyeOffsetX, eyeOffsetY);
 
-    auto drawEye = [&](const ofVec2f& center){
-        // 白目
+    // 共通：白いアウトラインの円
+    auto drawEyeCircle = [&](const ofVec2f& c){
+        ofNoFill();
         ofSetColor(255);
-        ofDrawCircle(center, eyeOuterR);
-
-        // 黒目（少し右寄り）
-        ofSetColor(0);
-        ofVec2f pupilCenter = center + ofVec2f(eyeOuterR * 0.3f, 0);
-        ofDrawCircle(pupilCenter, eyeInnerR);
+        ofSetLineWidth(2.0f);
+        ofDrawCircle(c, eyeOuterR);
     };
 
-    drawEye(eyeCenterTop);
-    drawEye(eyeCenterBottom);
+    // 左目
+    drawEyeCircle(leftEyeCenter);
+    // 左目の中の「コの字」っぽい線
+    {
+        float r = eyeOuterR * 0.6f;
+        ofPolyline poly;
+        poly.addVertex(leftEyeCenter.x - r * 0.4f, leftEyeCenter.y);         // 左
+        poly.addVertex(leftEyeCenter.x - r * 0.4f, leftEyeCenter.y + r*0.6f); // 下
+        poly.addVertex(leftEyeCenter.x + r * 0.2f, leftEyeCenter.y + r*0.6f); // 右
+        ofSetColor(255);
+        ofSetLineWidth(2.0f);
+        poly.draw();
+    }
 
-    ofPopStyle();
+    // 右目（円だけ）
+    drawEyeCircle(rightEyeCenter);
 
     // ------------------------
-    // 3. ベロ（ピンクのサイン波：形だけ・静止）
+    // 3. 口（ベロ）：円の中のサイン波（1周期 2π）
     // ------------------------
-    ofPushStyle();
-
-    ofSetColor(255, 100, 180);  // ピンク
-    ofSetLineWidth(8.0f);       // 幅のあるベロ
-
-    // 「円の右端」から出す
-    ofVec2f mouth = pos + ofVec2f(radius, 0);
-
-    float tongueLength = radius * 2.5f; // ベロの長さ
-    float amplitude    = radius * 0.25f; // サイン波の振幅
-    int   numPoints    = 80;             // サンプル数
-    float freq         = 1.5f;           // 波の数（1.5周期くらい）
-
-    // 進まない・動かないサイン波 → phase は 0 固定
-    float phase = 0.0f;
+    // 中央やや下に配置
+    ofVec2f mouthBase = pos + ofVec2f(0, radius * 0.25f);
+    float mouthLength = radius * 0.9f;      // 横幅
+    float amplitude   = radius * 0.20f;     // 振幅
+    int   numPoints   = 60;                 // サンプル点
 
     ofPolyline tongue;
     for (int i = 0; i < numPoints; ++i) {
-        float t = (float)i / (numPoints - 1); // 0〜1
-        float x = mouth.x + t * tongueLength;
-        float y = mouth.y + sin(t * TWO_PI * freq + phase) * amplitude;
+        float t = (float)i / (numPoints - 1);    // 0〜1
+        float x = mouthBase.x + (t - 0.5f) * mouthLength; // 中央から左右へ
+        float y = mouthBase.y + sin(t * TWO_PI) * amplitude; // 2π ちょうど1周期
         tongue.addVertex(x, y);
     }
 
+    ofSetColor(255);        // 線は白（ラフに近い感じ）
+    ofSetLineWidth(2.0f);
     tongue.draw();
+
     ofPopStyle();
 }
