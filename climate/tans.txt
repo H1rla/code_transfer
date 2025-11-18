@@ -7,49 +7,47 @@ public:
     void update();
     void draw();
 
-    // カメレオン（今は球体）
+    // カメレオン（今は円ベース）
     ofVec2f pos;      // 位置
     ofVec2f vel;      // 速度
     float radius;     // 半径
-    ofColor color;    // 色
 };
+
+
 
 #include "ofApp.h"
 
 //--------------------------------------------------------------
 void ofApp::setup(){
     ofSetFrameRate(60);
-    ofBackground(0);          // 黒背景
+    ofBackground(0);
     ofSetCircleResolution(64);
+    ofEnableSmoothing();
 
-    radius = 40.0f;
+    radius = 60.0f;
 
-    // 画面サイズから初期位置をランダムに決定
     float w = ofGetWidth();
     float h = ofGetHeight();
+
+    // 初期位置（画面内ランダム）
     pos.set(ofRandom(radius, w - radius),
             ofRandom(radius, h - radius));
 
-    // 速度ベクトルをランダムに
-    float speed = 5.0f;
+    // ランダムな速度
+    float speed = 4.0f;
     float angle = ofRandom(TWO_PI);
     vel.set(cos(angle) * speed,
             sin(angle) * speed);
-
-    // 色をランダム（HSVベース）
-    float hue = ofRandom(0, 255);
-    color.setHsb(hue, 220, 255);
 }
 
 //--------------------------------------------------------------
 void ofApp::update(){
-    // 位置更新
     pos += vel;
 
     float w = ofGetWidth();
     float h = ofGetHeight();
 
-    // 左右の壁で反射
+    // 壁で反射（左右）
     if (pos.x < radius) {
         pos.x = radius;
         vel.x *= -1;
@@ -58,7 +56,7 @@ void ofApp::update(){
         vel.x *= -1;
     }
 
-    // 上下の壁で反射
+    // 壁で反射（上下）
     if (pos.y < radius) {
         pos.y = radius;
         vel.y *= -1;
@@ -70,6 +68,65 @@ void ofApp::update(){
 
 //--------------------------------------------------------------
 void ofApp::draw(){
-    ofSetColor(color);
+    // ------------------------
+    // 1. カメレオン本体（緑の円）
+    // ------------------------
+    ofPushStyle();
+    ofSetColor(40, 200, 100);  // 緑
     ofDrawCircle(pos, radius);
+    ofPopStyle();
+
+    // ------------------------
+    // 2. 目（白い縁＋黒い瞳）
+    //    カメレオンは右向き想定
+    // ------------------------
+    ofPushStyle();
+
+    // 目の位置（頭の右上あたり）
+    ofVec2f eyeCenter = pos + ofVec2f(radius * 0.3f, -radius * 0.3f);
+    float eyeOuterR = radius * 0.22f;   // 白目
+    float eyeInnerR = radius * 0.10f;   // 黒目
+
+    // 白目
+    ofSetColor(255);
+    ofDrawCircle(eyeCenter, eyeOuterR);
+
+    // 黒目（少し右寄りにして「右を見てる」感じ）
+    ofSetColor(0);
+    ofVec2f pupilCenter = eyeCenter + ofVec2f(eyeOuterR * 0.3f, 0);
+    ofDrawCircle(pupilCenter, eyeInnerR);
+
+    ofPopStyle();
+
+    // ------------------------
+    // 3. ベロ（ピンクのサイン波）
+    // ------------------------
+    ofPushStyle();
+
+    ofSetColor(255, 100, 180);  // ピンク
+    ofSetLineWidth(10.0f);      // 幅のあるベロ
+
+    // 口の位置（円の右端あたり）
+    ofVec2f mouth = pos + ofVec2f(radius * 0.9f, 0);
+
+    float tongueLength = radius * 2.5f; // ベロの長さ
+    float amplitude    = radius * 0.25f; // サイン波の振幅
+    int   numPoints    = 80;             // サンプル数
+    float freq         = 1.5f;           // 波の数（1.5周期くらい）
+
+    // 時間で少しうねうね動かす（静止でいいなら time を 0 にしてOK）
+    float time = ofGetElapsedTimef();
+    float phase = time * 2.0f; // アニメーション用位相
+
+    ofPolyline tongue;
+    for (int i = 0; i < numPoints; ++i) {
+        float t = (float)i / (numPoints - 1); // 0〜1
+        float x = mouth.x + t * tongueLength;
+        float y = mouth.y + sin(t * TWO_PI * freq + phase) * amplitude;
+        tongue.addVertex(x, y);
+    }
+
+    tongue.draw();
+
+    ofPopStyle();
 }
