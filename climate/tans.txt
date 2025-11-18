@@ -1,202 +1,75 @@
-    // === 一日の時間管理（背景用） ===
-    float dayTime;      // 経過時間（秒）
-    float dayLength;    // 1周にかかる時間（秒）
+#pragma once
+#include "ofMain.h"
 
-    // === 天気切り替えの色トランジション用 ===
-    WeatherType prevWeather;          // 一つ前の天気
-    float weatherTransition;          // 0.0〜1.0
-    float weatherTransitionDuration;  // 何秒かけて天気色をブレンドするか
+class ofApp : public ofBaseApp{
+public:
+    void setup();
+    void update();
+    void draw();
 
-    // 背景描画
-    void drawBackground();
+    // カメレオン（今は球体）
+    ofVec2f pos;      // 位置
+    ofVec2f vel;      // 速度
+    float radius;     // 半径
+    ofColor color;    // 色
+};
 
-    // 天候ごとの色補正（背景用）
-    void applyWeatherTint(WeatherType wt, ofColor& top, ofColor& bottom);
-
-
-
-    // === 一日の時間（背景用） ===
-    dayTime   = 0.0f;
-    dayLength = 60.0f; // 60秒で一周
-
-    // === 天気トランジション初期化 ===
-    prevWeather             = currentWeather;
-    weatherTransition       = 1.0f;   // 最初は「もう完了している」状態
-    weatherTransitionDuration = 2.0f; // 2秒くらいかけて色をブレンド
-
-
-
-
-    // === 一日の時間を進める ===
-    dayTime += dt;
-    if (dayTime > dayLength) {
-        dayTime -= dayLength;
-    }
-
-    // === 天気トランジションの進行度を進める ===
-    if (weatherTransition < weatherTransitionDuration) {
-        weatherTransition += dt;
-        if (weatherTransition > weatherTransitionDuration) {
-            weatherTransition = weatherTransitionDuration;
-        }
-    }
-
-
-    weatherChangeTimer += dt;
-    if (weatherChangeTimer >= weatherChangeInterval) {
-        weatherChangeTimer = 0.0f;
-
-        // 次の天気を決める
-        WeatherType nextWeather = currentWeather;
-        switch (currentWeather) {
-        case WEATHER_SUNNY:        nextWeather = WEATHER_CLOUDY;       break;
-        case WEATHER_CLOUDY:       nextWeather = WEATHER_RAINY;        break;
-        case WEATHER_RAINY:        nextWeather = WEATHER_SNOWY;        break;
-        case WEATHER_SNOWY:        nextWeather = WEATHER_THUNDERSTORM; break;
-        case WEATHER_THUNDERSTORM: nextWeather = WEATHER_SUNNY;        break;
-        }
-
-        // ★ トランジションのセット
-        prevWeather       = currentWeather;
-        currentWeather    = nextWeather;
-        weatherTransition = 0.0f;
-
-        generateFlowFieldForCurrentWeather();
-    }
-
-
-
-
-void ofApp::keyPressed(int key) {
-
-    WeatherType nextWeather = currentWeather;
-    bool changed = false;
-
-    if (key == '1') {
-        nextWeather = WEATHER_SUNNY;
-        changed = true;
-    }
-    else if (key == '2') {
-        nextWeather = WEATHER_CLOUDY;
-        changed = true;
-    }
-    else if (key == '3') {
-        nextWeather = WEATHER_RAINY;
-        changed = true;
-    }
-    else if (key == '4') {
-        nextWeather = WEATHER_SNOWY;
-        changed = true;
-    }
-    else if (key == '5') {
-        nextWeather = WEATHER_THUNDERSTORM;
-        changed = true;
-    }
-
-    if (changed && nextWeather != currentWeather) {
-        prevWeather       = currentWeather;
-        currentWeather    = nextWeather;
-        weatherTransition = 0.0f;          // ★ 色ブレンド開始
-        weatherChangeTimer = 0.0f;         // 自動切替のタイマーもリセット
-        generateFlowFieldForCurrentWeather();
-    }
-}
-
-
-
-
+#include "ofApp.h"
 
 //--------------------------------------------------------------
-void ofApp::applyWeatherTint(WeatherType wt, ofColor& top, ofColor& bottom) {
-    switch (wt) {
-    case WEATHER_CLOUDY:
-        top    = top.getLerped(ofColor(120, 120, 140), 0.35f);
-        bottom = bottom.getLerped(ofColor(80, 80, 110), 0.35f);
-        break;
-    case WEATHER_RAINY:
-        top    = top.getLerped(ofColor(60, 80, 120), 0.45f);
-        bottom = bottom.getLerped(ofColor(30, 40, 80), 0.45f);
-        break;
-    case WEATHER_THUNDERSTORM:
-        top    = top.getLerped(ofColor(40, 40, 80), 0.5f);
-        bottom = bottom.getLerped(ofColor(10, 10, 40), 0.6f);
-        break;
-    case WEATHER_SNOWY:
-        top    = top.getLerped(ofColor(220, 240, 255), 0.4f);
-        bottom = bottom.getLerped(ofColor(200, 230, 255), 0.4f);
-        break;
-    case WEATHER_SUNNY:
-    default:
-        // 晴れは補正なし
-        break;
-    }
+void ofApp::setup(){
+    ofSetFrameRate(60);
+    ofBackground(0);          // 黒背景
+    ofSetCircleResolution(64);
+
+    radius = 40.0f;
+
+    // 画面サイズから初期位置をランダムに決定
+    float w = ofGetWidth();
+    float h = ofGetHeight();
+    pos.set(ofRandom(radius, w - radius),
+            ofRandom(radius, h - radius));
+
+    // 速度ベクトルをランダムに
+    float speed = 5.0f;
+    float angle = ofRandom(TWO_PI);
+    vel.set(cos(angle) * speed,
+            sin(angle) * speed);
+
+    // 色をランダム（HSVベース）
+    float hue = ofRandom(0, 255);
+    color.setHsb(hue, 220, 255);
 }
-
-
 
 //--------------------------------------------------------------
-void ofApp::drawBackground() {
+void ofApp::update(){
+    // 位置更新
+    pos += vel;
 
-    // dayTime -> 0〜1 のフェーズ
-    float phase = 0.0f;
-    if (dayLength > 0.0f) {
-        phase = fmodf(dayTime / dayLength, 1.0f);
-        if (phase < 0.0f) phase += 1.0f;
+    float w = ofGetWidth();
+    float h = ofGetHeight();
+
+    // 左右の壁で反射
+    if (pos.x < radius) {
+        pos.x = radius;
+        vel.x *= -1;
+    } else if (pos.x > w - radius) {
+        pos.x = w - radius;
+        vel.x *= -1;
     }
 
-    // 時間帯ごとのベース色（上と下）
-    ofColor baseTop, baseBottom;
-
-    if (phase < 0.20f) {
-        // 夜（0.00〜0.20）
-        float t = phase / 0.20f;
-        baseTop    = ofColor::fromHsb(200, 150, 20 + 40 * t);
-        baseBottom = ofColor::fromHsb(210, 120, 10 + 30 * t);
+    // 上下の壁で反射
+    if (pos.y < radius) {
+        pos.y = radius;
+        vel.y *= -1;
+    } else if (pos.y > h - radius) {
+        pos.y = h - radius;
+        vel.y *= -1;
     }
-    else if (phase < 0.35f) {
-        // 夜明け（0.20〜0.35）
-        float t = (phase - 0.20f) / 0.15f;
-        baseTop    = ofColor::fromHsb(25, 180, ofLerp(40, 200, t));
-        baseBottom = ofColor::fromHsb(200, 80,  ofLerp(30, 180, t));
-    }
-    else if (phase < 0.75f) {
-        // 昼（0.35〜0.75）
-        float t = (phase - 0.35f) / 0.40f;
-        baseTop    = ofColor::fromHsb(200, ofLerp(80, 40, t), 230);
-        baseBottom = ofColor::fromHsb(195, ofLerp(40, 10, t), 245);
-    }
-    else {
-        // 夕方〜夜（0.75〜1.00）
-        float t = (phase - 0.75f) / 0.25f;
-        baseTop    = ofColor::fromHsb(15, 200, ofLerp(220, 40, t));
-        baseBottom = ofColor::fromHsb(230, 120, ofLerp(60, 10, t));
-    }
-
-    // === 天候トランジションの進み具合（0〜1） ===
-    float tWeather = 1.0f;
-    if (weatherTransitionDuration > 0.0f) {
-        tWeather = ofClamp(weatherTransition / weatherTransitionDuration, 0.0f, 1.0f);
-    }
-
-    // prevWeather 用の色
-    ofColor topPrev  = baseTop;
-    ofColor botPrev  = baseBottom;
-    applyWeatherTint(prevWeather, topPrev, botPrev);
-
-    // currentWeather 用の色
-    ofColor topCurr  = baseTop;
-    ofColor botCurr  = baseBottom;
-    applyWeatherTint(currentWeather, topCurr, botCurr);
-
-    // 2つの天気の色をブレンド
-    ofColor topFinal = topPrev.getLerped(topCurr, tWeather);
-    ofColor botFinal = botPrev.getLerped(botCurr, tWeather);
-
-    ofBackgroundGradient(topFinal, botFinal, OF_GRADIENT_LINEAR);
 }
 
-
-
-
-
-
+//--------------------------------------------------------------
+void ofApp::draw(){
+    ofSetColor(color);
+    ofDrawCircle(pos, radius);
+}
