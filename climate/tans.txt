@@ -1,166 +1,94 @@
-// 雲ブロブ：量子表示（ピクセル敷き詰め＋点滅）、天気ごとの性格付き
-void ofApp::drawCloudBlob(float cx, float cy,
-    float baseR,
-    const ofColor& baseColor,
-    float seed)
-{
-    // -----------------------------
-    // 1. 雲全体の「枠」を 6:4 くらいの比率にする
-    //    （以前より少しコンパクト＆縦が低め）
-    // -----------------------------
+    // === 勝者の形状レベル（多重化用） ===
+    // 0 = 何もなし / 1 = 一重 / 2 = 二重 / 3 = 三重 …
+    vector<vector<int>> caLevel;
+    int maxShapeLevel;   // 何重まで増やすか（例: 3）
 
-    // 横：3.0f、縦：2.0f → 比率 3:2 ≒ 6:4
-    float W = baseR * 3.0f;   // 左右方向の長さ
-    float H = baseR * 2.0f;   // 縦方向の長さ
 
-    struct Bubble {
-        float nx, ny; // 雲中心からの相対位置（-0.5〜0.5くらいの正規化座標）
-        float r;      // baseR に対する半径倍率
-    };
 
-    // 枠の形（輪郭）はそのまま利用
-    static const Bubble bubbles[] = {
-        { -0.45f,  0.05f, 0.95f }, // 左端
-        { -0.25f,  0.30f, 1.05f }, // 左上
-        {  0.00f,  0.35f, 1.15f }, // 真上
-        {  0.25f,  0.30f, 1.05f }, // 右上
-        {  0.45f,  0.05f, 0.95f }, // 右端
-        { -0.25f, -0.25f, 0.80f }, // 左下
-        {  0.00f, -0.30f, 0.85f }, // 真下
-        {  0.25f, -0.25f, 0.80f }  // 右下
-    };
-    const int bubbleCount = sizeof(bubbles) / sizeof(Bubble);
+    ca.assign(caRows, vector<int>(caCols, 0));
+    caNext.assign(caRows, vector<int>(caCols, 0));
+    randomizeCA();
 
-    auto insideCloud = [&](float px, float py) -> bool {
-        for (int i = 0; i < bubbleCount; i++) {
-            float bx = cx + bubbles[i].nx * W;
-            float by = cy + bubbles[i].ny * H;
-            float br = baseR * bubbles[i].r;
+    caUpdateInterval = 0.2f;
+    caTimer = 0.0f;
 
-            float dx = px - bx;
-            float dy = py - by;
-            if (dx * dx + dy * dy <= br * br) {
-                return true;
+
+
+    // === 勝者レベルの初期化 ===
+    caLevel.assign(caRows, vector<int>(caCols, 0));
+    maxShapeLevel = 3;  // とりあえず三重までにしておく
+
+    // 初期状態で生きているセルはレベル1にしておく
+    for (int y = 0; y < caRows; ++y) {
+        for (int x = 0; x < caCols; ++x) {
+            if (ca[y][x] == 1) {
+                caLevel[y][x] = 1;
             }
         }
-        return false;
-    };
-
-    // === 量子表示パラメータ（天気ごとに変える） ===
-    float flickerSpeed = 2.0f;
-    float flickerThreshold = 0.35f;
-    float flickerMinStrength = 0.4f;
-    float flickerMaxStrength = 1.2f;
-    float baseAlpha = 120.0f;
-    float whiteLerp = 0.4f;
-
-    switch (currentWeather) {
-    case WEATHER_SUNNY:
-        flickerSpeed = 1.0f;
-        flickerThreshold = 0.55f;
-        flickerMinStrength = 0.4f;
-        flickerMaxStrength = 0.9f;
-        baseAlpha = 90.0f;
-        whiteLerp = 0.35f;
-        break;
-
-    case WEATHER_CLOUDY:
-        flickerSpeed = 1.2f;
-        flickerThreshold = 0.45f;
-        flickerMinStrength = 0.5f;
-        flickerMaxStrength = 1.0f;
-        baseAlpha = 110.0f;
-        whiteLerp = 0.45f;
-        break;
-
-    case WEATHER_RAINY:
-        flickerSpeed = 2.0f;
-        flickerThreshold = 0.40f;
-        flickerMinStrength = 0.6f;
-        flickerMaxStrength = 1.1f;
-        baseAlpha = 130.0f;
-        whiteLerp = 0.5f;
-        break;
-
-    case WEATHER_SNOWY:
-        flickerSpeed = 1.4f;
-        flickerThreshold = 0.38f;
-        flickerMinStrength = 0.6f;
-        flickerMaxStrength = 1.0f;
-        baseAlpha = 140.0f;
-        whiteLerp = 0.6f;
-        break;
-
-    case WEATHER_THUNDERSTORM:
-        flickerSpeed = 4.0f;
-        flickerThreshold = 0.30f;
-        flickerMinStrength = 0.5f;
-        flickerMaxStrength = 1.3f;
-        baseAlpha = 160.0f;
-        whiteLerp = 0.5f;
-        break;
     }
 
-    // 1マスの大きさ（細かいピクセル）
-    float cell = baseR * 0.35f * (2.0f / 3.0f);
-    if (cell < 1.0f) cell = 1.0f;
 
-    float stepX = cell;
-    float stepY = cell;
 
-    ofColor cloudColor = baseColor;
-    cloudColor.lerp(ofColor(255, 255, 255), whiteLerp);
 
-    float maxR = std::max(W * 0.5f, H * 0.5f);
-    float tGlobal = ofGetElapsedTimef();
+    // ---------- 4. 次ステップの CA として確定 ----------
+    ca = movedGrid;
 
-    for (float oy = -H * 0.5f; oy <= H * 0.5f; oy += stepY) {
-        for (float ox = -W * 0.5f; ox <= W * 0.5f; ox += stepX) {
 
-            float px = cx + ox;
-            float py = cy + oy;
 
-            if (!insideCloud(px, py)) continue;
 
-            float dx = px - cx;
-            float dy = py - cy;
-            float dist = sqrtf(dx * dx + dy * dy);
-            float t = ofClamp(dist / maxR, 0.0f, 1.0f);
-
-            // 中心が濃く、外にいくほど薄く
-            float falloff = 1.0f - powf(t, 1.5f);
-            falloff = ofClamp(falloff, 0.0f, 1.0f);
-
-            // 点滅用ノイズ
-            float flickerNoise = ofNoise(
-                px * 0.12f,
-                py * 0.12f,
-                seed * 0.3f + tGlobal * flickerSpeed
-            );
-
-            if (flickerNoise < flickerThreshold) {
-                continue;
+    // ---------- 4. 次ステップの CA として確定 ＋ レベル更新 ----------
+    for (int y = 0; y < caRows; ++y) {
+        for (int x = 0; x < caCols; ++x) {
+            if (movedGrid[y][x] == 1) {
+                // ★ 勝者：レベルを1つ進化させる（外側→内側へ多重化）
+                int lvl = caLevel[y][x];
+                if (lvl <= 0) lvl = 1;            // 新規勝者は最低1
+                lvl = std::min(lvl + 1, maxShapeLevel);
+                caLevel[y][x] = lvl;
+            } else {
+                // ★ 負けたら消える：レベルもリセット
+                caLevel[y][x] = 0;
             }
-
-            float flickerStrength = ofMap(
-                flickerNoise,
-                flickerThreshold, 1.0f,
-                flickerMinStrength, flickerMaxStrength,
-                true
-            );
-
-            float staticNoise  = ofNoise(px * 0.03f, py * 0.03f, seed * 0.05f);
-            float staticFactor = ofLerp(0.9f, 1.1f, staticNoise);
-
-            float alpha = baseAlpha * falloff * flickerStrength * staticFactor;
-            alpha = ofClamp(alpha, 0.0f, 255.0f);
-            if (alpha < 5.0f) continue;
-
-            ofColor c = cloudColor;
-            c.a = static_cast<unsigned char>(alpha);
-
-            ofSetColor(c);
-            ofDrawRectangle(px - cell * 0.5f, py - cell * 0.5f, cell, cell);
         }
+    }
+
+    ca = movedGrid;
+
+
+
+
+
+case WEATHER_SUNNY:
+    ofDrawCircle(cx, cy, baseR);
+    break;
+
+
+case WEATHER_SUNNY:
+{
+    // ★ レベルに応じて二重丸・三重丸にする
+    int lvl = caLevel[y][x];
+    if (lvl <= 0) lvl = 1;                 // 念のため最低1
+
+    int rings = ofClamp(lvl, 1, maxShapeLevel);
+
+    for (int k = 0; k < rings; ++k) {
+        float t = (float)k / (float)std::max(rings - 1, 1);
+        // 外側が baseR、内側ほど小さく
+        float r = ofLerp(baseR, baseR * 0.3f, t);
+
+        // 内側ほど少し白く
+        ofColor c = baseColor;
+        ofColor white = ofColor(255, 255, 255);
+        c.lerp(white, t * 0.5f);
+
+        ofSetColor(c);
+        ofDrawCircle(cx, cy, r);
     }
 }
+    break;
+
+
+
+
+
+
