@@ -1,81 +1,37 @@
-#pragma once
-
+//--------------------------------------------------------------
+void ofApp::draw() {
+    // 天気 CA（アイコン）と、雲 CA を描く
+    drawCA();
+    drawCloudCA();
+}
 
 //--------------------------------------------------------------
-// グリッド座標 (gx,gy) に対して、天候ごとの整数ベクトル方向 (dx,dy) を返す
-void ofApp::getFlowDirForCell(int gx, int gy, int& dx, int& dy) {
-    dx = 0;
-    dy = 0;
+void ofApp::keyPressed(int key) {
+    bool changed = false;
 
-    // 安全策：列・行数チェック
-    if (caCols <= 0 || caRows <= 0) return;
-
-    switch (currentWeather) {
-    case WEATHER_SUNNY:
-        // 晴れ：流れなし（その場にとどまる）
-        dx = 0;
-        dy = 0;
-        break;
-
-    case WEATHER_CLOUDY:
-    {
-        // 曇り：横方向4分割で左右に流す
-        int bandX = (gx * 4) / caCols; // 0〜3
-        if (bandX % 2 == 0) {
-            dx = 1;   // 右へ
-        } else {
-            dx = -1;  // 左へ
-        }
-        dy = 0;
-        break;
+    if (key == '1') {
+        currentWeather = WEATHER_SUNNY;
+        changed = true;
+    }
+    else if (key == '2') {
+        currentWeather = WEATHER_CLOUDY;
+        changed = true;
+    }
+    else if (key == '3') {
+        currentWeather = WEATHER_RAINY;
+        changed = true;
+    }
+    else if (key == '4') {
+        currentWeather = WEATHER_SNOWY;
+        changed = true;
+    }
+    else if (key == '5') {
+        currentWeather = WEATHER_THUNDERSTORM;
+        changed = true;
     }
 
-    case WEATHER_RAINY:
-    {
-        // 雨：ざっくり左右2分割で斜め下
-        int bandX = (gx * 2) / caCols; // 0 or 1
-        // int bandY = (gy * 2) / caRows; // 必要なら使う
-
-        dy = 1; // 下方向は固定
-
-        if (bandX == 0) {
-            dx = -1; // 左下
-        } else {
-            dx = 1;  // 右下
-        }
-        break;
-    }
-
-    case WEATHER_SNOWY:
-    {
-        // 雪：横方向4分割で右下/左下を交互
-        int bandX = (gx * 4) / caCols; // 0〜3
-
-        dy = 1; // 下へ
-
-        if (bandX % 2 == 0) {
-            dx = 1;  // 右下
-        } else {
-            dx = -1; // 左下
-        }
-        break;
-    }
-
-    case WEATHER_THUNDERSTORM:
-    {
-        // 雷：縦8×横8の細かいグリッドで、4方向の斜めベクトル
-        int bx = (gx * 8) / caCols; // 0〜7
-        int by = (gy * 8) / caRows; // 0〜7
-
-        // x 偶数/奇数で左右、y 偶数/奇数で上下を決定
-        dx = (bx % 2 == 0) ? -1 : 1;
-        dy = (by % 2 == 0) ? -1 : 1;
-        break;
-    }
-
-    default:
-        dx = 0;
-        dy = 0;
-        break;
+    if (changed) {
+        // 天気を変えたらベクトル場も作り直す
+        generateFlowFieldForCurrentWeather();
     }
 }
