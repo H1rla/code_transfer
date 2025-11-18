@@ -1,43 +1,150 @@
-　// -------------------------------------------------
-// 曇り：30度傾いた多重平行四辺形
-// -------------------------------------------------
-else if (currentWeather == WEATHER_CLOUDY) {
+//--------------------------------------------------------------
+void ofApp::drawCA() {
 
-    // 30度のラジアン
-    float angle = ofDegToRad(30.0f);
+    int w = ofGetWidth();
+    int h = ofGetHeight();
 
-    // 30度方向にずらすための成分
-    float offsetX = cos(angle) * (baseR * 0.3f);
-    float offsetY = sin(angle) * (baseR * 0.3f);
+    for (int y = 0; y < caRows; y++) {
+        for (int x = 0; x < caCols; x++) {
 
-    float radius = baseR;
+            if (ca[y][x] == 0) continue;
 
-    for (int k = 0; k < lvl; k++) {
+            float baseX = x * cellSize + cellSize * 0.5f;
+            float baseY = y * cellSize + cellSize * 0.5f;
 
-        float t = (float)k / (float)lvl;
-        ofColor cc = baseColor;
-        cc.lerp(ofColor::white, t * 0.5f);
-        ofSetColor(cc);
+            ofVec2f v = flowField[y][x];
+            float cx = baseX + v.x * flowTime;
+            float cy = baseY + v.y * flowTime;
 
-        float r = radius;
+            // wrap
+            if (w > 0) {
+                cx = fmodf(cx, (float)w);
+                if (cx < 0) cx += w;
+            }
+            if (h > 0) {
+                cy = fmodf(cy, (float)h);
+                if (cy < 0) cy += h;
+            }
 
-        // ▼　ここで位置を少しずらして「30度方向に層を広げる」
-        float cx2 = cx + offsetX * k;
-        float cy2 = cy + offsetY * k;
+            float baseR = cellSize * 0.45f;
 
-        float w0 = r * 3.0f;
-        float h0 = r * 1.6f;
-        float skew = w0 * 0.3f;
+            // -------------------------
+            // 天候ごとの色
+            // -------------------------
+            ofColor baseColor;
+            switch (currentWeather) {
+            case WEATHER_SUNNY:        baseColor = ofColor(255,240,150); break;
+            case WEATHER_CLOUDY:       baseColor = ofColor(190,190,210); break;
+            case WEATHER_RAINY:        baseColor = ofColor(100,140,255); break;
+            case WEATHER_SNOWY:        baseColor = ofColor(230,250,255); break;
+            case WEATHER_THUNDERSTORM: baseColor = ofColor(255,230,80); break;
+            default:                   baseColor = ofColor(255); break;
+            }
 
-        ofNoFill();
-        ofDrawLine(cx2 - w0/2 + skew, cy2 - h0/2, cx2 + w0/2 + skew, cy2 - h0/2);
-        ofDrawLine(cx2 + w0/2 + skew, cy2 - h0/2, cx2 + w0/2 - skew, cy2 + h0/2);
-        ofDrawLine(cx2 + w0/2 - skew, cy2 + h0/2, cx2 - w0/2 - skew, cy2 + h0/2);
-        ofDrawLine(cx2 - w0/2 - skew, cy2 + h0/2, cx2 - w0/2 + skew, cy2 - h0/2);
-        ofFill();
+            // -------------------------
+            // レベル取得
+            // -------------------------
+            int lvl = caLevel[y][x];
+            if (lvl <= 0) lvl = 1;
 
-        // 0.8倍に縮めて次の層へ
-        radius *= 0.8f;
-        if (radius < 1.0f) break;
-    }
+            // -------------------------
+            // 多重化処理（共通）
+            // -------------------------
+            float radius = baseR;
+
+            for (int k = 0; k < lvl; k++) {
+
+                float t = (float)k / (float)lvl;
+                ofColor cc = baseColor;
+                cc.lerp(ofColor::white, t * 0.5f);
+                ofSetColor(cc);
+
+                float r = radius;
+
+                switch (currentWeather) {
+
+                // -------------------------------------------------
+                // 晴れ：同心円
+                // -------------------------------------------------
+                case WEATHER_SUNNY:
+                    ofNoFill();
+                    ofDrawCircle(cx, cy, r);
+                    ofFill();
+                    break;
+
+                // -------------------------------------------------
+                // 雷：三角
+                // -------------------------------------------------
+                case WEATHER_THUNDERSTORM:
+                    ofNoFill();
+                    ofDrawTriangle(
+                        cx, cy - r,
+                        cx - r, cy + r,
+                        cx + r, cy + r
+                    );
+                    ofFill();
+                    break;
+
+                // -------------------------------------------------
+                // 曇り：30度傾いた多重平行四辺形
+                // -------------------------------------------------
+                case WEATHER_CLOUDY:
+                {
+                    float angle = ofDegToRad(30.0f);
+                    float offX = cos(angle) * (baseR * 0.3f) * k;
+                    float offY = sin(angle) * (baseR * 0.3f) * k;
+                    float cx2 = cx + offX;
+                    float cy2 = cy + offY;
+
+                    float w0 = r * 3.0f;
+                    float h0 = r * 1.6f;
+                    float skew = w0 * 0.3f;
+
+                    ofNoFill();
+                    ofDrawLine(cx2 - w0/2 + skew, cy2 - h0/2, cx2 + w0/2 + skew, cy2 - h0/2);
+                    ofDrawLine(cx2 + w0/2 + skew, cy2 - h0/2, cx2 + w0/2 - skew, cy2 + h0/2);
+                    ofDrawLine(cx2 + w0/2 - skew, cy2 + h0/2, cx2 - w0/2 - skew, cy2 + h0/2);
+                    ofDrawLine(cx2 - w0/2 - skew, cy2 + h0/2, cx2 - w0/2 + skew, cy2 - h0/2);
+                    ofFill();
+                }
+                break;
+
+                // -------------------------------------------------
+                // 雨：菱形（ダイヤ）
+                // -------------------------------------------------
+                case WEATHER_RAINY:
+                    ofNoFill();
+                    ofDrawLine(cx, cy - r, cx + r, cy);
+                    ofDrawLine(cx + r, cy, cx, cy + r);
+                    ofDrawLine(cx, cy + r, cx - r, cy);
+                    ofDrawLine(cx - r, cy, cx, cy - r);
+                    ofFill();
+                    break;
+
+                // -------------------------------------------------
+                // 雪：六角形
+                // -------------------------------------------------
+                case WEATHER_SNOWY:
+                {
+                    ofNoFill();
+                    ofPolyline poly;
+                    for (int i = 0; i < 6; i++) {
+                        float angle = TWO_PI * i / 6.0f;
+                        poly.addVertex(cx + cos(angle)*r, cy + sin(angle)*r);
+                    }
+                    poly.close();
+                    poly.draw();
+                    ofFill();
+                }
+                break;
+
+                } // switch currentWeather
+
+                radius *= 0.8f;
+                if (radius < 1.0f) break;
+
+            } // for k
+
+        } // for x
+    } // for y
 }
