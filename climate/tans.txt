@@ -1,90 +1,1355 @@
-if (movedGrid[y][x] == 1) {
-    // ★ 勝者：無限に多重化する
-    int lvl = caLevel[y][x];
-    if (lvl <= 0) lvl = 1;
-    else lvl += 1;          // 無限増殖
-    caLevel[y][x] = lvl;
-} else {
-    // ★ 負けたら完全削除
-    caLevel[y][x] = 0;
+#include "ofApp.h"
+#include <cmath>
+
+//--------------------------------------------------------------
+void ofApp::setup() {
+    ofSetBackgroundColor(0);
+    currentWeather = WEATHER_SUNNY;
+
+    // === セルオートマトン初期化 ===
+    cellSize = 20;
+    caCols = ofGetWidth() / cellSize;
+    caRows = ofGetHeight() / cellSize;
+
+    ca.assign(caRows, vector<int>(caCols, 0));
+    caNext.assign(caRows, vector<int>(caCols, 0));
+    randomizeCA();
+
+    // ★ 強さグリッド初期化
+    caStrength.assign(caRows, vector<float>(caCols, 0.0f));
+    for (int y = 0; y < caRows; ++y) {
+        for (int x = 0; x < caCols; ++x) {
+            if (ca[y][x] == 1) {
+                caStrength[y][x] = 1.0f;   // 初期生存セルの強さ
+            }
+        }
+    }
+
+    caUpdateInterval = 0.2f;
+    caTimer = 0.0f;
+
+    // === 雲用 CA 初期化 ===
+    cloudCA.assign(caRows, vector<int>(caCols, 0));
+    cloudNext.assign(caRows, vector<int>(caCols, 0));
+    cloudUpdateInterval = 0.30f;
+    cloudTimer = 0.0f;
+
+
+    // === 勝者レベルの初期化 ===
+    caLevel.assign(caRows, vector<int>(caCols, 0));
+    maxShapeLevel = 3;  // とりあえず三重までにしておく
+
+    // 初期状態で生きているセルはレベル1にしておく
+    for (int y = 0; y < caRows; ++y) {
+        for (int x = 0; x < caCols; ++x) {
+            if (ca[y][x] == 1) {
+                caLevel[y][x] = 1;
+            }
+        }
+    }
+
+    // === ベクトル場初期化 ===
+    flowField.assign(caRows, vector<ofVec2f>(caCols, ofVec2f(0, 0)));
+    flowTime = 0.0f;
+    generateFlowFieldForCurrentWeather();
+
+    // === 天気カオス制御の初期化 ===
+    chaosR = 3.9;
+    chaosX = ofRandom(0.1, 0.9);
+    weatherTimer = 0.0f;
+    weatherBaseMin = 5.0f;
+    weatherBaseMax = 25.0f;
+
+    // ★ 勝者ルール用パラメータ
+    strengthGrowth = 0.08f;  // 勝つたびに +0.08
+    strengthDecay = 0.01f;  // 1ステップごとに -1%
+    chaosClusterBaseStrength = 1.5f;   // カオス塊は強めにスタート
 }
 
 
-ofNoFill();
-ofDrawCircle(cx, cy, r);
-ofFill();
-
-
-
-ofNoFill();
-ofDrawTriangle(
-    cx, cy - r,
-    cx - r, cy + r,
-    cx + r, cy + r
-);
-ofFill();
 
 
 
 
-case WEATHER_SUNNY:
-{
-    int lvl = caLevel[y][x];
-    if (lvl <= 0) break;
+//--------------------------------------------------------------
+// 現在の天気に応じてベクトル場を生成（バンドごとに方向をランダム）
+void ofApp::generateFlowFieldForCurrentWeather() {
+    flowTime = 0.0f;  // 天気が変わるたびに時間もリセット
 
-    float radius = baseR;
+    flowField.assign(caRows, vector<ofVec2f>(caCols, ofVec2f(0, 0)));
 
-    ofColor c = baseColor;
+    // 晴れはベクトル場なし（全部0のまま）
+    if (currentWeather == WEATHER_SUNNY) {
+        return;
+    }
 
-    for (int k = 0; k < lvl; k++) {
+    int bandRows = 1;
+    int bandCols = 1;
+    float baseSpeed = 20.0f;  // px/sec くらいの基準速度
 
-        // 色：内側ほど白く
-        float t = (float)k / (float)lvl;
-        ofColor cc = c;
-        cc.lerp(ofColor::white, t * 0.5f);
-        ofSetColor(cc);
+    auto randomSign = []() -> float {
+        return (ofRandomuf() < 0.5f) ? -1.0f : 1.0f;
+        };
 
-        // 枠線で描く
-        ofNoFill();
-        ofDrawCircle(cx, cy, radius);
-        ofFill();
+    switch (currentWeather) {
+    case WEATHER_CLOUDY:
+        bandRows = 1;
+        bandCols = 4;    // 横4分割で左右に流す
+        baseSpeed = 25.0f;
+        break;
 
-        radius *= 0.8f;      // ← 0.8 倍で縮小して中に積層
-        if (radius < 1.0f) break;
+    case WEATHER_RAINY:
+        bandRows = 2;
+        bandCols = 2;    // ざっくり 2x2 で斜め下
+        baseSpeed = 45.0f;
+        break;
+
+    case WEATHER_SNOWY:
+        bandRows = 4;
+        bandCols = 2;    // 4x2 で斜め下
+        baseSpeed = 25.0f;
+        break;
+
+    case WEATHER_THUNDERSTORM:
+        bandRows = 8;
+        bandCols = 8;    // 細かい 8x8
+        baseSpeed = 55.0f;
+        break;
+
+    default:
+        break;
+    }
+
+    vector<vector<ofVec2f>> bandVel(
+        bandRows, vector<ofVec2f>(bandCols, ofVec2f(0, 0))
+    );
+
+    float degToRad = PI / 180.0f;
+
+    // バンドごとの方向を決める
+    for (int br = 0; br < bandRows; ++br) {
+        for (int bc = 0; bc < bandCols; ++bc) {
+
+            ofVec2f v(0, 0);
+
+            if (currentWeather == WEATHER_CLOUDY) {
+                float sx = randomSign();
+                v.set(sx * baseSpeed, 0.0f);
+            }
+            else if (currentWeather == WEATHER_RAINY) {
+                float sx = randomSign();   // 左 or 右
+                float angle = 20.0f * degToRad;
+                float vy = baseSpeed * cos(angle);  // 下方向
+                float vx = baseSpeed * sin(angle) * sx;
+                v.set(vx, vy);
+            }
+            else if (currentWeather == WEATHER_SNOWY) {
+                float sx = randomSign();   // 右 or 左
+                float vy = baseSpeed * (1.0f / sqrtf(2.0f));
+                float vx = baseSpeed * (1.0f / sqrtf(2.0f)) * sx;
+                v.set(vx, vy);
+            }
+            else if (currentWeather == WEATHER_THUNDERSTORM) {
+                int dir = ofRandom(4); // 0〜3
+                float sx = (dir == 0 || dir == 2) ? 1.0f : -1.0f;
+                float sy = (dir == 0 || dir == 1) ? -1.0f : 1.0f;
+                float vx = baseSpeed * (1.0f / sqrtf(2.0f)) * sx;
+                float vy = baseSpeed * (1.0f / sqrtf(2.0f)) * sy;
+                v.set(vx, vy);
+            }
+
+            bandVel[br][bc] = v;
+        }
+    }
+
+    // バンドをグリッド全体に展開
+    for (int y = 0; y < caRows; ++y) {
+        for (int x = 0; x < caCols; ++x) {
+            int br = (bandRows > 0) ? ofClamp(y * bandRows / caRows, 0, bandRows - 1) : 0;
+            int bc = (bandCols > 0) ? ofClamp(x * bandCols / caCols, 0, bandCols - 1) : 0;
+            flowField[y][x] = bandVel[br][bc];
+        }
     }
 }
-break;
 
 
 
-case WEATHER_THUNDERSTORM:
+
+
+//--------------------------------------------------------------
+void ofApp::updateFlowFieldOverTime() {
+
+    flowUpdateTimer += ofGetLastFrameTime();
+    if (flowUpdateTimer < flowUpdateInterval) return;
+
+    flowUpdateTimer = 0.0f;
+
+    float angleJitter = ofRandom(-8.0f, 8.0f);  // 8度だけランダム揺らぎ
+
+    float rad = ofDegToRad(angleJitter);
+
+    float cs = cos(rad);
+    float sn = sin(rad);
+
+    for (int y = 0; y < caRows; y++) {
+        for (int x = 0; x < caCols; x++) {
+
+            ofVec2f v = flowField[y][x];
+
+            // 速度0（晴れ）の場合はスキップ
+            if (v.lengthSquared() < 0.01f) continue;
+
+            float nx = v.x * cs - v.y * sn;
+            float ny = v.x * sn + v.y * cs;
+
+            flowField[y][x].set(nx, ny);
+        }
+    }
+}
+
+
+
+
+//--------------------------------------------------------------
+void ofApp::stepChaos() {
+    chaosX = chaosR * chaosX * (1.0 - chaosX);
+    if (chaosX < 0.0) chaosX = 0.0;
+    if (chaosX > 1.0) chaosX = 1.0;
+}
+
+
+
+
+
+//--------------------------------------------------------------
+void ofApp::updateWeatherByChaos() {
+    if (weatherTimer <= 0.0f) return;
+
+    stepChaos();
+
+    float interval = ofMap(
+        chaosX,
+        0.0, 1.0,
+        weatherBaseMin, weatherBaseMax,
+        true
+    );
+
+    if (weatherTimer < interval) {
+        return;
+    }
+
+    weatherTimer = 0.0f;
+
+    int  step = 0;
+    bool forceThunder = false;
+
+    if (chaosX < 0.60) {
+        step = +1;
+    }
+    else if (chaosX < 0.80) {
+        step = -1;
+    }
+    else if (chaosX < 0.95) {
+        step = +2;
+    }
+    else {
+        forceThunder = true;
+    }
+
+    applyWeatherStep(step, forceThunder);
+}
+
+
+
+
+
+//--------------------------------------------------------------
+void ofApp::applyWeatherStep(int step, bool forceThunder) {
+    if (forceThunder) {
+        currentWeather = WEATHER_THUNDERSTORM;
+        generateFlowFieldForCurrentWeather();
+        return;
+    }
+
+    int idx = 0;
+    switch (currentWeather) {
+    case WEATHER_SUNNY:        idx = 0; break;
+    case WEATHER_CLOUDY:       idx = 1; break;
+    case WEATHER_RAINY:        idx = 2; break;
+    case WEATHER_SNOWY:        idx = 3; break;
+    case WEATHER_THUNDERSTORM: idx = 2; break;
+    }
+
+    const int cycleSize = 4;
+
+    int newIdx = idx + step;
+    while (newIdx < 0)          newIdx += cycleSize;
+    while (newIdx >= cycleSize) newIdx -= cycleSize;
+
+    WeatherType nextWeather;
+    switch (newIdx) {
+    case 0: nextWeather = WEATHER_SUNNY;  break;
+    case 1: nextWeather = WEATHER_CLOUDY; break;
+    case 2: nextWeather = WEATHER_RAINY;  break;
+    case 3: nextWeather = WEATHER_SNOWY;  break;
+    default: nextWeather = WEATHER_SUNNY; break;
+    }
+
+    currentWeather = nextWeather;
+    generateFlowFieldForCurrentWeather();
+}
+
+
+
+
+
+//--------------------------------------------------------------
+void ofApp::randomizeCA() {
+    for (int y = 0; y < caRows; y++) {
+        for (int x = 0; x < caCols; x++) {
+            ca[y][x] = ofRandom(1.0f) < 0.5f ? 0 : 1;
+        }
+    }
+}
+
+
+
+
+//--------------------------------------------------------------
+void ofApp::update() {
+    float dt = ofGetLastFrameTime();
+
+    // === 天候ごとの CA 更新スピード ===
+    switch (currentWeather) {
+    case WEATHER_SUNNY:
+        caUpdateInterval = 0.25f;
+        cloudUpdateInterval = 0.35f;
+        break;
+    case WEATHER_CLOUDY:
+        caUpdateInterval = 0.20f;
+        cloudUpdateInterval = 0.30f;
+        break;
+    case WEATHER_RAINY:
+        caUpdateInterval = 0.14f;
+        cloudUpdateInterval = 0.24f;
+        break;
+    case WEATHER_SNOWY:
+        caUpdateInterval = 0.18f;
+        cloudUpdateInterval = 0.28f;
+        break;
+    case WEATHER_THUNDERSTORM:
+        caUpdateInterval = 0.10f;
+        cloudUpdateInterval = 0.20f;
+        break;
+    }
+
+    flowTime += dt;
+    updateFlowFieldOverTime();
+
+    caTimer += dt;
+    if (caTimer >= caUpdateInterval) {
+        updateCA();
+        caTimer = 0.0f;
+    }
+
+    cloudTimer += dt;
+    if (cloudTimer >= cloudUpdateInterval) {
+        updateCloudCA();
+        cloudTimer = 0.0f;
+    }
+
+    weatherTimer += dt;
+    updateWeatherByChaos();
+}
+
+
+
+
+//--------------------------------------------------------------
+void ofApp::updateCA() {
+    if (caCols <= 0 || caRows <= 0) return;
+
+    // ---------- 1. ライフゲームの生死判定 ----------
+    for (int y = 0; y < caRows; y++) {
+        for (int x = 0; x < caCols; x++) {
+
+            int aliveNeighbors = 0;
+            for (int j = -1; j <= 1; j++) {
+                for (int i = -1; i <= 1; i++) {
+                    if (i == 0 && j == 0) continue;
+
+                    int nx = (x + i + caCols) % caCols;
+                    int ny = (y + j + caRows) % caRows;
+
+                    aliveNeighbors += ca[ny][nx];
+                }
+            }
+
+            int current = ca[y][x];
+            int nextState = 0;
+
+            if (current == 1) {
+                if (aliveNeighbors == 2 || aliveNeighbors == 3) {
+                    nextState = 1;
+                }
+                else {
+                    nextState = 0;
+                    // 死んだセルから雲 CA を発生させる
+                    cloudCA[y][x] = 1;
+                }
+            }
+            else {
+                if (aliveNeighbors == 3) {
+                    nextState = 1;
+                }
+                else {
+                    nextState = 0;
+                }
+            }
+
+            caNext[y][x] = nextState;
+            if (nextState == 0) {
+                // ここではまだ位置は変えないので、強さは後で整理
+            }
+        }
+    }
+
+    // ---------- 2. ベクトル場に沿った移動＋「強さ」で勝者決定 ----------
+    vector<vector<int>>   movedGrid(caRows, vector<int>(caCols, 0));
+    vector<vector<float>> newStrength(caRows, vector<float>(caCols, 0.0f));
+
+    for (int y = 0; y < caRows; y++) {
+        for (int x = 0; x < caCols; x++) {
+
+            if (caNext[y][x] != 1) continue;
+
+            // このセルの現在の強さ
+            float s = caStrength[y][x];
+            if (s <= 0.0f) s = 1.0f;  // 新規 or 弱すぎるセルには最低強さ
+
+            // ベクトル場から移動先を決定
+            int dx = 0, dy = 0;
+            getFlowDirForCell(x, y, dx, dy);
+
+            int tx = (x + dx + caCols) % caCols;
+            int ty = (y + dy + caRows) % caRows;
+
+            // 勝者ルール：強さが大きい方が勝者
+            float boosted = s + strengthGrowth;  // 勝ったことで少し強くなる
+            float& slotStrength = newStrength[ty][tx];
+
+            if (boosted > slotStrength) {
+                // 既存の候補より強ければ上書き
+                slotStrength = boosted;
+                movedGrid[ty][tx] = 1;
+            }
+            // 同じくらいならたまに入れ替えてもいいけど、
+            // 「勝者が勝ち続ける」感を出したいのでここでは完全に強さ優先。
+        }
+    }
+
+    // ---------- 3. カオス＋クラスタ生成（新しい勢力） ----------
+    spawnChaosClustersByChaos(movedGrid);
+
+    // spawnChaosClustersByChaos 内で caStrength も書き換えるので、
+    // newStrength とマージする必要がある。
+    // まず newStrength を caStrength に反映しつつ減衰をかける。
+    for (int y = 0; y < caRows; y++) {
+        for (int x = 0; x < caCols; x++) {
+            if (movedGrid[y][x] == 1) {
+                float s = newStrength[y][x];
+                if (s <= 0.0f) {
+                    // カオスクラスタなどで先に強さが入っている場合はそのまま
+                    s = caStrength[y][x];
+                    if (s <= 0.0f) s = 1.0f;
+                }
+                // 減衰をかける（勝ち続けると増えるが、時間とともに少し落ちる）
+                s *= (1.0f - strengthDecay);
+                if (s < 0.1f) s = 0.1f;       // 最低ライン
+                if (s > 3.0f) s = 3.0f;       // 上限
+                caStrength[y][x] = s;
+            }
+            else {
+                caStrength[y][x] = 0.0f;      // 死んだセルは強さもゼロ
+            }
+        }
+    }
+
+    // ---------- 4. 新しい CA を確定 ----------
+  
+ // ---------- 4. 次ステップの CA として確定 ＋ レベル更新 ----------
+    for (int y = 0; y < caRows; ++y) {
+        for (int x = 0; x < caCols; ++x) {
+            
+            
+            if (movedGrid[y][x] == 1) {
+                // ★ 勝者：無限に多重化する
+                int lvl = caLevel[y][x];
+                if (lvl <= 0) lvl = 1;
+                else lvl += 1;          // 無限増殖
+                caLevel[y][x] = lvl;
+            }
+            else {
+                // ★ 負けたら完全削除
+                caLevel[y][x] = 0;
+            }
+
+        
+        }
+    }
+
+    ca = movedGrid;
+}
+
+
+
+//--------------------------------------------------------------
+void ofApp::spawnChaosClustersByChaos(vector<vector<int>>& movedGrid) {
+    int aliveCount = 0;
+    for (int y = 0; y < caRows; y++) {
+        for (int x = 0; x < caCols; x++) {
+            if (movedGrid[y][x] == 1) {
+                aliveCount++;
+            }
+        }
+    }
+
+    int totalCells = caCols * caRows;
+    int minAliveCells = static_cast<int>(totalCells * 0.03f); // 3% 未満ならほぼ壊滅
+
+    if (aliveCount >= minAliveCells) {
+        return;  // まだ十分いるので生成しない
+    }
+
+    // chaosX (0〜1) からクラスタ数を決める
+    int maxClusters = 5;
+    int clusterCount = ofMap(chaosX, 0.0f, 1.0f, 1, maxClusters, true);
+
+    for (int c = 0; c < clusterCount; ++c) {
+        bool placed = false;
+
+        for (int tries = 0; tries < 60; ++tries) {
+            int cx = ofRandom(caCols);
+            int cy = ofRandom(caRows);
+
+            if (movedGrid[cy][cx] == 1) continue;
+
+            // 近傍の生存数を見て「スカスカなところ」を優先
+            int neighbors = 0;
+            for (int j = -2; j <= 2; j++) {
+                for (int i = -2; i <= 2; i++) {
+                    if (i == 0 && j == 0) continue;
+                    int nx = (cx + i + caCols) % caCols;
+                    int ny = (cy + j + caRows) % caRows;
+                    neighbors += movedGrid[ny][nx];
+                }
+            }
+
+            if (neighbors <= 2) {
+                // ここに1クラスタを置く
+                spawnClusterAt(cx, cy, movedGrid);
+                placed = true;
+                break;
+            }
+        }
+
+        if (!placed) {
+            // どうしても見つからなければどこかランダムに置く
+            int cx = ofRandom(caCols);
+            int cy = ofRandom(caRows);
+            spawnClusterAt(cx, cy, movedGrid);
+        }
+    }
+}
+
+
+
+//--------------------------------------------------------------
+void ofApp::spawnClusterAt(int cx, int cy, vector<vector<int>>& movedGrid) {
+    // 十字型パターン＋中心
+    static const int OFFS[5][2] = {
+        { 0,  0},
+        { 1,  0},
+        {-1,  0},
+        { 0,  1},
+        { 0, -1}
+    };
+
+    for (int k = 0; k < 5; ++k) {
+        int nx = (cx + OFFS[k][0] + caCols) % caCols;
+        int ny = (cy + OFFS[k][1] + caRows) % caRows;
+
+        movedGrid[ny][nx] = 1;
+        caStrength[ny][nx] = chaosClusterBaseStrength; // 強めスタート
+    }
+}
+
+
+
+
+//--------------------------------------------------------------
+void ofApp::updateCloudCA() {
+    if (caCols <= 0 || caRows <= 0) return;
+
+    for (int y = 0; y < caRows; y++) {
+        for (int x = 0; x < caCols; x++) {
+
+            int aliveNeighbors = 0;
+            for (int j = -1; j <= 1; j++) {
+                for (int i = -1; i <= 1; i++) {
+                    if (i == 0 && j == 0) continue;
+
+                    int nx = (x + i + caCols) % caCols;
+                    int ny = (y + j + caRows) % caRows;
+
+                    aliveNeighbors += cloudCA[ny][nx];
+                }
+            }
+
+            int current = cloudCA[y][x];
+            int nextState = 0;
+
+            if (current == 1) {
+                if (aliveNeighbors == 2) {
+                    nextState = 1;
+                }
+                else {
+                    nextState = 0;
+                }
+            }
+            else {
+                if (aliveNeighbors == 3) {
+                    nextState = 1;
+                }
+                else {
+                    nextState = 0;
+                }
+            }
+
+            cloudNext[y][x] = nextState;
+        }
+    }
+
+    cloudCA = cloudNext;
+}
+
+
+
+
+
+//--------------------------------------------------------------
+void ofApp::getFlowDirForCell(int gx, int gy, int& dx, int& dy) {
+    dx = 0;
+    dy = 0;
+
+    if (caCols <= 0 || caRows <= 0) return;
+
+    switch (currentWeather) {
+    case WEATHER_SUNNY:
+        dx = 0;
+        dy = 0;
+        break;
+
+    case WEATHER_CLOUDY:
+    {
+        int bandX = (gx * 4) / caCols; // 0〜3
+        if (bandX % 2 == 0) dx = 1;
+        else                dx = -1;
+        dy = 0;
+        break;
+    }
+
+    case WEATHER_RAINY:
+    {
+        int bandX = (gx * 2) / caCols; // 0 or 1
+        dy = 1;
+        dx = (bandX == 0) ? -1 : 1;
+        break;
+    }
+
+    case WEATHER_SNOWY:
+    {
+        int bandX = (gx * 4) / caCols; // 0〜3
+        dy = 1;
+        dx = (bandX % 2 == 0) ? 1 : -1;
+        break;
+    }
+
+    case WEATHER_THUNDERSTORM:
+    {
+        int bx = (gx * 8) / caCols; // 0〜7
+        int by = (gy * 8) / caRows; // 0〜7
+        dx = (bx % 2 == 0) ? -1 : 1;
+        dy = (by % 2 == 0) ? -1 : 1;
+        break;
+    }
+
+    default:
+        dx = 0;
+        dy = 0;
+        break;
+    }
+}
+
+
+
+
+
+
+//--------------------------------------------------------------
+void ofApp::drawCA() {
+    int w = ofGetWidth();
+    int h = ofGetHeight();
+
+    for (int y = 0; y < caRows; y++) {
+        for (int x = 0; x < caCols; x++) {
+            if (ca[y][x] == 0) continue;
+
+            float baseX = x * cellSize + cellSize * 0.5f;
+            float baseY = y * cellSize + cellSize * 0.5f;
+
+            ofVec2f v = flowField[y][x];
+            float cx = baseX + v.x * flowTime;
+            float cy = baseY + v.y * flowTime;
+
+            if (w > 0) {
+                cx = fmodf(cx, (float)w);
+                if (cx < 0) cx += w;
+            }
+            if (h > 0) {
+                cy = fmodf(cy, (float)h);
+                if (cy < 0) cy += h;
+            }
+
+            float baseR = cellSize * 0.45f;
+
+            ofColor baseColor;
+            switch (currentWeather) {
+                
+                
+
+            case WEATHER_SUNNY:
+            {
+                // ★ レベルに応じて二重丸・三重丸にする
+                int lvl = caLevel[y][x];
+                if (lvl <= 0) lvl = 1;                 // 念のため最低1
+
+                int rings = ofClamp(lvl, 1, maxShapeLevel);
+
+                for (int k = 0; k < rings; ++k) {
+                    float t = (float)k / (float)std::max(rings - 1, 1);
+                    // 外側が baseR、内側ほど小さく
+                    float r = ofLerp(baseR, baseR * 0.3f, t);
+
+                    // 内側ほど少し白く
+                    ofColor c = baseColor;
+                    ofColor white = ofColor(255, 255, 255);
+                    c.lerp(white, t * 0.5f);
+
+                    ofSetColor(c);
+  
+                    ofNoFill();
+                    ofDrawCircle(cx, cy, r);
+                    ofFill();
+
+
+                }
+            }
+            break;
+
+
+
+
+            case WEATHER_CLOUDY:
+                baseColor = ofColor(190, 190, 210);
+                break;
+            case WEATHER_RAINY:
+                baseColor = ofColor(100, 140, 255);
+                break;
+            case WEATHER_SNOWY:
+                baseColor = ofColor(230, 250, 255);
+                break;
+            case WEATHER_THUNDERSTORM:
+                baseColor = ofColor(255, 230, 80);
+                break;
+            default:
+                baseColor = ofColor(255, 255, 255);
+                break;
+            }
+
+            ofSetColor(baseColor);
+
+            switch (currentWeather) {
+
+
+            case WEATHER_SUNNY:
+            {
+                int lvl = caLevel[y][x];
+                if (lvl <= 0) break;
+
+                float radius = baseR;
+
+                ofColor c = baseColor;
+
+                for (int k = 0; k < lvl; k++) {
+
+                    // 色：内側ほど白く
+                    float t = (float)k / (float)lvl;
+                    ofColor cc = c;
+                    cc.lerp(ofColor::white, t * 0.5f);
+                    ofSetColor(cc);
+
+                    // 枠線で描く
+                    ofNoFill();
+                    ofDrawCircle(cx, cy, radius);
+                    ofFill();
+
+                    radius *= 0.8f;      // ← 0.8 倍で縮小して中に積層
+                    if (radius < 1.0f) break;
+                }
+            }
+            break;
+
+
+
+
+            case WEATHER_CLOUDY:
+            {
+                float w0 = baseR * 3.0f;
+                float h0 = baseR * 1.6f;
+                float skew = w0 * 0.3f;
+                ofDrawLine(cx - w0 / 2 + skew, cy - h0 / 2,
+                    cx + w0 / 2 + skew, cy - h0 / 2);
+                ofDrawLine(cx + w0 / 2 + skew, cy - h0 / 2,
+                    cx + w0 / 2 - skew, cy + h0 / 2);
+                ofDrawLine(cx + w0 / 2 - skew, cy + h0 / 2,
+                    cx - w0 / 2 - skew, cy + h0 / 2);
+                ofDrawLine(cx - w0 / 2 - skew, cy + h0 / 2,
+                    cx - w0 / 2 + skew, cy - h0 / 2);
+            }
+            break;
+            case WEATHER_RAINY:
+            {
+                float r = baseR * 1.2f;
+                ofDrawLine(cx, cy - r, cx + r, cy);
+                ofDrawLine(cx + r, cy, cx, cy + r);
+                ofDrawLine(cx, cy + r, cx - r, cy);
+                ofDrawLine(cx - r, cy, cx, cy - r);
+            }
+            break;
+            case WEATHER_SNOWY:
+            {
+                float r = baseR * 1.1f;
+                ofPolyline poly;
+                for (int i = 0; i < 6; i++) {
+                    float angle = TWO_PI * i / 6.0f;
+                    float vx = cx + cos(angle) * r;
+                    float vy = cy + sin(angle) * r;
+                    poly.addVertex(vx, vy);
+                }
+                poly.close();
+                poly.draw();
+            }
+            break;
+
+
+            case WEATHER_THUNDERSTORM:
+            {
+                int lvl = caLevel[y][x];
+                if (lvl <= 0) break;
+
+                float radius = baseR;
+
+                for (int k = 0; k < lvl; k++) {
+
+                    float t = (float)k / (float)lvl;
+                    ofColor cc = baseColor;
+                    cc.lerp(ofColor::white, t * 0.5f);
+                    ofSetColor(cc);
+
+                    float r = radius;
+
+                    ofNoFill();
+                    ofDrawTriangle(
+                        cx, cy - r,
+                        cx - r, cy + r,
+                        cx + r, cy + r
+                    );
+                    ofFill();
+
+                    radius *= 0.8f;
+                    if (radius < 1.0f) break;
+                }
+            }
+            break;
+
+
+            }
+            break;
+            default:
+                break;
+            }
+        }
+    }
+}
+
+
+
+
+
+//--------------------------------------------------------------
+void ofApp::drawCloudCA() {
+    int w = ofGetWidth();
+    int h = ofGetHeight();
+
+    for (int y = 0; y < caRows; y++) {
+        for (int x = 0; x < caCols; x++) {
+            if (cloudCA[y][x] == 0) continue;
+
+            float baseX = x * cellSize + cellSize * 0.5f;
+            float baseY = y * cellSize + cellSize * 0.5f;
+
+            ofVec2f v = flowField[y][x];
+            float cx = baseX + v.x * flowTime;
+            float cy = baseY + v.y * flowTime;
+
+            if (w > 0) {
+                cx = fmodf(cx, (float)w);
+                if (cx < 0) cx += w;
+            }
+            if (h > 0) {
+                cy = fmodf(cy, (float)h);
+                if (cy < 0) cy += h;
+            }
+
+            float baseR = cellSize * 0.45f;
+
+            ofColor baseColor;
+            switch (currentWeather) {
+            case WEATHER_SUNNY:
+                baseColor = ofColor(255, 240, 200);
+                break;
+            case WEATHER_CLOUDY:
+                baseColor = ofColor(210, 210, 230);
+                break;
+            case WEATHER_RAINY:
+                baseColor = ofColor(170, 200, 255);
+                break;
+            case WEATHER_SNOWY:
+                baseColor = ofColor(240, 255, 255);
+                break;
+            case WEATHER_THUNDERSTORM:
+                baseColor = ofColor(255, 240, 160);
+                break;
+            default:
+                baseColor = ofColor(255, 255, 255);
+                break;
+            }
+
+            float seed = x * 17.0f + y * 31.0f + 1000.0f;
+            drawCloudBlob(cx, cy, baseR * 1.3f, baseColor, seed);
+        }
+    }
+}
+
+
+
+
+//--------------------------------------------------------------
+void ofApp::drawCloudBlob(float cx, float cy,
+    float baseR,
+    const ofColor& baseColor,
+    float seed)
 {
-    int lvl = caLevel[y][x];
-    if (lvl <= 0) break;
+    // -----------------------------
+    // 1. 雲全体の「枠」を 6:4 くらいの比率にする
+    //    （以前より少しコンパクト＆縦が低め）
+    // -----------------------------
 
-    float radius = baseR;
+    // 横：3.0f、縦：2.0f → 比率 3:2 ≒ 6:4
+    float W = baseR * 3.0f;   // 左右方向の長さ
+    float H = baseR * 2.0f;   // 縦方向の長さ
 
-    for (int k = 0; k < lvl; k++) {
+    struct Bubble {
+        float nx, ny; // 雲中心からの相対位置（-0.5〜0.5くらいの正規化座標）
+        float r;      // baseR に対する半径倍率
+    };
 
-        float t = (float)k / (float)lvl;
-        ofColor cc = baseColor;
-        cc.lerp(ofColor::white, t * 0.5f);
-        ofSetColor(cc);
+    // 枠の形（輪郭）はそのまま利用
+    static const Bubble bubbles[] = {
+        { -0.45f,  0.05f, 0.95f }, // 左端
+        { -0.25f,  0.30f, 1.05f }, // 左上
+        {  0.00f,  0.35f, 1.15f }, // 真上
+        {  0.25f,  0.30f, 1.05f }, // 右上
+        {  0.45f,  0.05f, 0.95f }, // 右端
+        { -0.25f, -0.25f, 0.80f }, // 左下
+        {  0.00f, -0.30f, 0.85f }, // 真下
+        {  0.25f, -0.25f, 0.80f }  // 右下
+    };
+    const int bubbleCount = sizeof(bubbles) / sizeof(Bubble);
 
-        float r = radius;
+    auto insideCloud = [&](float px, float py) -> bool {
+        for (int i = 0; i < bubbleCount; i++) {
+            float bx = cx + bubbles[i].nx * W;
+            float by = cy + bubbles[i].ny * H;
+            float br = baseR * bubbles[i].r;
 
-        ofNoFill();
-        ofDrawTriangle(
-            cx, cy - r,
-            cx - r, cy + r,
-            cx + r, cy + r
+            float dx = px - bx;
+            float dy = py - by;
+            if (dx * dx + dy * dy <= br * br) {
+                return true;
+            }
+        }
+        return false;
+        };
+
+    // === 量子表示パラメータ（天気ごとに変える） ===
+    float flickerSpeed = 2.0f;
+    float flickerThreshold = 0.35f;
+    float flickerMinStrength = 0.4f;
+    float flickerMaxStrength = 1.2f;
+    float baseAlpha = 120.0f;
+    float whiteLerp = 0.4f;
+
+    switch (currentWeather) {
+    case WEATHER_SUNNY:
+        flickerSpeed = 1.0f;
+        flickerThreshold = 0.55f;
+        flickerMinStrength = 0.4f;
+        flickerMaxStrength = 0.9f;
+        baseAlpha = 90.0f;
+        whiteLerp = 0.35f;
+        break;
+
+    case WEATHER_CLOUDY:
+        flickerSpeed = 1.2f;
+        flickerThreshold = 0.45f;
+        flickerMinStrength = 0.5f;
+        flickerMaxStrength = 1.0f;
+        baseAlpha = 110.0f;
+        whiteLerp = 0.45f;
+        break;
+
+    case WEATHER_RAINY:
+        flickerSpeed = 2.0f;
+        flickerThreshold = 0.40f;
+        flickerMinStrength = 0.6f;
+        flickerMaxStrength = 1.1f;
+        baseAlpha = 130.0f;
+        whiteLerp = 0.5f;
+        break;
+
+    case WEATHER_SNOWY:
+        flickerSpeed = 1.4f;
+        flickerThreshold = 0.38f;
+        flickerMinStrength = 0.6f;
+        flickerMaxStrength = 1.0f;
+        baseAlpha = 140.0f;
+        whiteLerp = 0.6f;
+        break;
+
+    case WEATHER_THUNDERSTORM:
+        flickerSpeed = 4.0f;
+        flickerThreshold = 0.30f;
+        flickerMinStrength = 0.5f;
+        flickerMaxStrength = 1.3f;
+        baseAlpha = 160.0f;
+        whiteLerp = 0.5f;
+        break;
+    }
+
+    // 1マスの大きさ（細かいピクセル）
+    float cell = baseR * 0.35f * (2.0f / 3.0f);
+    if (cell < 1.0f) cell = 1.0f;
+
+    float stepX = cell;
+    float stepY = cell;
+
+    ofColor cloudColor = baseColor;
+    cloudColor.lerp(ofColor(255, 255, 255), whiteLerp);
+
+    float maxR = std::max(W * 0.5f, H * 0.5f);
+    float tGlobal = ofGetElapsedTimef();
+
+    for (float oy = -H * 0.5f; oy <= H * 0.5f; oy += stepY) {
+        for (float ox = -W * 0.5f; ox <= W * 0.5f; ox += stepX) {
+
+            float px = cx + ox;
+            float py = cy + oy;
+
+            if (!insideCloud(px, py)) continue;
+
+            float dx = px - cx;
+            float dy = py - cy;
+            float dist = sqrtf(dx * dx + dy * dy);
+            float t = ofClamp(dist / maxR, 0.0f, 1.0f);
+
+            // 中心が濃く、外にいくほど薄く
+            float falloff = 1.0f - powf(t, 1.5f);
+            falloff = ofClamp(falloff, 0.0f, 1.0f);
+
+            // 点滅用ノイズ
+            float flickerNoise = ofNoise(
+                px * 0.12f,
+                py * 0.12f,
+                seed * 0.3f + tGlobal * flickerSpeed
+            );
+
+            if (flickerNoise < flickerThreshold) {
+                continue;
+            }
+
+            float flickerStrength = ofMap(
+                flickerNoise,
+                flickerThreshold, 1.0f,
+                flickerMinStrength, flickerMaxStrength,
+                true
+            );
+
+            float staticNoise = ofNoise(px * 0.03f, py * 0.03f, seed * 0.05f);
+            float staticFactor = ofLerp(0.9f, 1.1f, staticNoise);
+
+            float alpha = baseAlpha * falloff * flickerStrength * staticFactor;
+            alpha = ofClamp(alpha, 0.0f, 255.0f);
+            if (alpha < 5.0f) continue;
+
+            ofColor c = cloudColor;
+            c.a = static_cast<unsigned char>(alpha);
+
+            ofSetColor(c);
+            ofDrawRectangle(px - cell * 0.5f, py - cell * 0.5f, cell, cell);
+        }
+    }
+}
+
+
+
+
+
+//--------------------------------------------------------------
+void ofApp::drawNoisyPolygon(float cx, float cy,
+    float baseRadius,
+    int sides,
+    float rotationRad,
+    float noiseScale,
+    float noiseAmp,
+    float seed,
+    float time)
+{
+    ofPolyline poly;
+    poly.clear();
+
+    for (int i = 0; i < sides; i++) {
+        float tt = (float)i / (float)sides;
+        float angle = rotationRad + TWO_PI * tt;
+
+        float dx = cos(angle);
+        float dy = sin(angle);
+
+        float n = ofNoise(
+            dx * noiseScale + seed,
+            dy * noiseScale + seed * 1.37f,
+            time * 0.3f
         );
-        ofFill();
 
-        radius *= 0.8f;
-        if (radius < 1.0f) break;
+        float offset = (n - 0.5f) * 2.0f * noiseAmp;
+        float r = baseRadius * (1.0f + offset);
+
+        float vx = cx + dx * r;
+        float vy = cy + dy * r;
+        poly.addVertex(vx, vy);
     }
+
+    poly.close();
+    poly.draw();
 }
-break;
+
+
+
+
+
+//--------------------------------------------------------------
+void ofApp::draw() {
+    drawCA();
+    drawCloudCA();
+}
+
+
+
+
+
+
+//--------------------------------------------------------------
+void ofApp::keyPressed(int key) {
+    bool changed = false;
+
+    if (key == '1') {
+        currentWeather = WEATHER_SUNNY;
+        changed = true;
+    }
+    else if (key == '2') {
+        currentWeather = WEATHER_CLOUDY;
+        changed = true;
+    }
+    else if (key == '3') {
+        currentWeather = WEATHER_RAINY;
+        changed = true;
+    }
+    else if (key == '4') {
+        currentWeather = WEATHER_SNOWY;
+        changed = true;
+    }
+    else if (key == '5') {
+        currentWeather = WEATHER_THUNDERSTORM;
+        changed = true;
+    }
+
+    if (changed) {
+        generateFlowFieldForCurrentWeather();
+    }
+}　　　　
+
+
+
+
+## ここまでofApp.cpp
+
+
+##ここからofApp.h
+
+
+#pragma once
+
+#include "ofMain.h"
+using std::vector;
+
+// === 天気の種類 ===
+enum WeatherType {
+    WEATHER_SUNNY,
+    WEATHER_CLOUDY,
+    WEATHER_RAINY,
+    WEATHER_SNOWY,
+    WEATHER_THUNDERSTORM,
+};
+
+class ofApp : public ofBaseApp {
+public:
+    void setup();
+    void update();
+    void draw();
+    void keyPressed(int key);
+
+private:
+    // =============================
+    //  天気・環境
+    // =============================
+    WeatherType currentWeather;
+
+    // =============================
+    //  基本 CA グリッドパラメータ
+    // =============================
+    int cellSize;
+    int caCols;
+    int caRows;
+
+    // =============================
+    //  天気用セルオートマトン
+    // =============================
+    vector<vector<int>>  ca;
+    vector<vector<int>>  caNext;
+
+    // ★ 各セルの強さ（勝者ルール用）
+    vector<vector<float>> caStrength;
+
+    float caUpdateInterval;
+    float caTimer;
+
+    void randomizeCA();
+    void updateCA();  // 勝者ルール＋カオス生成を含む
+    void drawCA();
+
+
+    // =============================
+    //  雲 用 CA
+    // =============================
+    vector<vector<int>>  cloudCA;
+    vector<vector<int>>  cloudNext;
+
+    float cloudUpdateInterval;
+    float cloudTimer;
+
+    void updateCloudCA();
+    void drawCloudCA();
+
+
+    // =============================
+    //  ベクトル場（天候による風）
+    // =============================
+    vector<vector<ofVec2f>> flowField;
+    float flowTime;
+
+    void generateFlowFieldForCurrentWeather();
+    void getFlowDirForCell(int gx, int gy, int& dx, int& dy);
+
+
+    // =============================
+    //  カオス天気制御
+    // =============================
+    double chaosX;      // ロジスティック写像（0〜1）
+    double chaosR;      // カオスパラメータ（3.8〜4.0）
+    float  weatherTimer;
+    float  weatherBaseMin;
+    float  weatherBaseMax;
+
+    void stepChaos();
+    void updateWeatherByChaos();
+    void applyWeatherStep(int step, bool forceThunder);
+
+
+    // =============================
+    //  雲の量子ブロブ
+    // =============================
+    void drawCloudBlob(float cx, float cy,
+        float baseR,
+        const ofColor& baseColor,
+        float seed);
+
+    void drawNoisyPolygon(float cx, float cy,
+        float baseRadius,
+        int sides,
+        float rotationRad,
+        float noiseScale,
+        float noiseAmp,
+        float seed,
+        float time);
+
+
+    // =============================
+    //  勝者ルール用パラメータ
+    // =============================
+    float strengthGrowth;            // 勝てば強くなる増加量
+    float strengthDecay;             // 時間による減衰
+    float chaosClusterBaseStrength;  // カオスクラスタ初期強さ
+
+
+    // =============================
+    //  カオスクラスタ生成（新しい勢力）
+    // =============================
+    void spawnChaosClustersByChaos(vector<vector<int>>& movedGrid);
+    void spawnClusterAt(int cx, int cy, vector<vector<int>>& movedGrid);
+
+
+    //--------------------------------------------------------------
+// ★ ベクトル場の時間変化パラメータ（追加）
+    float flowUpdateTimer = 0.0f;
+    float flowUpdateInterval = 1.5f;   // 毎1.5秒に1回、方向を再決定
+    void updateFlowFieldOverTime();
+
+    // === 勝者の形状レベル（多重化用） ===
+// 0 = 何もなし / 1 = 一重 / 2 = 二重 / 3 = 三重 …
+    vector<vector<int>> caLevel;
+ //   int maxShapeLevel;   // 何重まで増やすか（例: 3）
+
+};
 
 
