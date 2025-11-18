@@ -1,65 +1,149 @@
+#pragma once
+#include "ofMain.h"
+
+class ofApp : public ofBaseApp{
+public:
+    void setup();
+    void update();
+    void draw();
+
+    // カメレオン（今は円ベース）
+    ofVec2f pos;      // 位置
+    ofVec2f vel;      // 速度
+    float radius;     // 半径
+
+    // 葉っぱを描くヘルパー
+    void drawLeaf(const ofVec2f& center, float leafRadius, float angleRad);
+};
+
+
+
+void ofApp::setup(){
+    ofSetFrameRate(60);
+    ofBackground(255);          // 背景白（画像に近づけるなら）
+    ofSetCircleResolution(64);
+    ofEnableSmoothing();
+    ofEnableAlphaBlending();    // 透明度を使う
+
+    radius = 160.0f;            // ちょっと大きめでもOK
+
+    float w = ofGetWidth();
+    float h = ofGetHeight();
+
+    pos.set(w * 0.5f, h * 0.5f);  // いったん画面中央スタートでもOK
+
+    float speed = 3.0f;
+    float angle = ofRandom(TWO_PI);
+    vel.set(cos(angle) * speed,
+            sin(angle) * speed);
+}
+
+
+
+// ----------------------------------------------------------
+// center  : 葉っぱの中心位置（ワールド座標）
+// leafRadius : 葉っぱの大きさ
+// angleRad   : カメレオンの中心から見た角度（外向きに回転させる）
+// ----------------------------------------------------------
+void ofApp::drawLeaf(const ofVec2f& center, float leafRadius, float angleRad){
+    ofPushMatrix();
+    ofTranslate(center);
+    ofRotateRad(angleRad);  // 角度で回転（外側を向く）
+
+    // 葉っぱ本体の色（少し濃い緑、α ≒ 0.8）
+    ofColor leafColor(20, 100, 40, 204);
+    ofSetColor(leafColor);
+    ofFill();
+
+    // 1. 丸い部分
+    ofDrawCircle(0, 0, leafRadius);
+
+    // 2. 左に伸びる「とがり」部分（三角形でOK）
+    ofDrawTriangle(
+        -leafRadius * 1.6f, 0,               // 左の先端
+        -leafRadius * 0.3f, -leafRadius*0.6f,
+        -leafRadius * 0.3f,  leafRadius*0.6f
+    );
+
+    // 3. 中のスジ（灰色）
+    ofSetColor(80, 80, 80, 220);
+    ofSetLineWidth(2.0f);
+
+    // 中心からランダム風に数本
+    ofVec2f centerLine( -leafRadius * 0.2f, 0 ); // ちょい左にずらした中心
+    int numLines = 6;
+    for(int i = 0; i < numLines; ++i){
+        float a = ofMap(i, 0, numLines-1, -PI * 0.7f, PI * 0.7f);
+        ofVec2f end = ofVec2f(cos(a), sin(a)) * leafRadius * 1.1f;
+        ofDrawLine(centerLine, end);
+    }
+
+    ofPopMatrix();
+}
+
+
+
 void ofApp::draw(){
     ofPushStyle();
 
-    // ------------------------
-    // 1. 本体（緑の円）＋白いアウトライン
-    // ------------------------
-    ofSetColor(40, 200, 100);      // 本体 緑
+    // ============================
+    // 0. カメレオンの円周に葉っぱを敷き詰める
+    // ============================
+    int numLeaves = 18;                 // 葉っぱの数（お好みで）
+    float leafRadius = radius * 0.35f;  // 葉っぱの大きさ
+
+    for(int i = 0; i < numLeaves; ++i){
+        float t = (float)i / numLeaves;
+        float theta = t * TWO_PI;     // 0〜2π
+
+        // カメレオン円のフチ上に葉っぱの中心を置く
+        ofVec2f leafCenter = pos + ofVec2f(
+            cos(theta) * radius,
+            sin(theta) * radius
+        );
+
+        // theta の向きに葉っぱを外側へ向ける
+        drawLeaf(leafCenter, leafRadius, theta);
+    }
+
+    // ============================
+    // 1. 本体（緑の円）
+    // ============================
+    ofSetColor(100, 180, 80);      // 少し明るめの緑
     ofFill();
     ofDrawCircle(pos, radius);
 
-    ofNoFill();
-    ofSetColor(255);
-    ofSetLineWidth(2.0f);
-    ofDrawCircle(pos, radius);
-
-    // ------------------------
-    // 2. 両目：白い円の中に黒い円
-    // ------------------------
-    float eyeOuterR = radius * 0.22f;   // 白目の半径
-    float eyeInnerR = radius * 0.10f;   // 黒目の半径
-
-    float eyeOffsetX = radius * 0.35f;  // 左右位置
-    float eyeOffsetY = -radius * 0.20f; // 上下位置
+    // 2. 目（黒い円）※前と同じ構造
+    float eyeOuterR = radius * 0.18f;
+    float eyeOffsetX = radius * 0.35f;
+    float eyeOffsetY = -radius * 0.10f;
 
     ofVec2f leftEyeCenter  = pos + ofVec2f(-eyeOffsetX, eyeOffsetY);
     ofVec2f rightEyeCenter = pos + ofVec2f( eyeOffsetX, eyeOffsetY);
 
-    auto drawEye = [&](const ofVec2f& c){
-        // 白目
-        ofFill();
-        ofSetColor(255);
-        ofDrawCircle(c, eyeOuterR);
+    ofSetColor(0);
+    ofDrawCircle(leftEyeCenter, eyeOuterR);
+    ofDrawCircle(rightEyeCenter, eyeOuterR);
 
-        // 黒目（中央）
-        ofSetColor(0);
-        ofDrawCircle(c, eyeInnerR);
-    };
+    // 3. ベロ（太いピンクのサイン波）
+    ofSetColor(255, 150, 190);
+    ofSetLineWidth(12.0f);
 
-    drawEye(leftEyeCenter);
-    drawEye(rightEyeCenter);
-
-    // ------------------------
-    // 3. ベロ（太いピンクのサイン波：内部のみ）
-    // ------------------------
-    ofSetColor(255, 120, 180);  // ピンク
-    ofSetLineWidth(12.0f);      // 太さ
-
-    // ベロの位置（円の下部中心）
-    ofVec2f mouthBase = pos + ofVec2f(0, radius * 0.25f);
-
-    float tongueLength = radius * 0.9f;    // 横に広がる長さ
-    float amplitude    = radius * 0.20f;    // 振幅（上下）
-    int   numPoints    = 80;                // 滑らかさ
+    ofVec2f mouthBase = pos + ofVec2f(0, radius * 0.30f);
+    float tongueLength = radius * 0.9f;
+    float amplitude    = radius * 0.20f;
+    int   numPoints    = 80;
 
     ofPolyline tongue;
     for (int i = 0; i < numPoints; ++i) {
-        float t = (float)i / (numPoints - 1);     // 0〜1
-        float x = mouthBase.x + (t - 0.5f) * tongueLength;
-        float y = mouthBase.y + sin(t * TWO_PI) * amplitude; // 2πの1周期
+        float tt = (float)i / (numPoints - 1);     // 0〜1
+        float x = mouthBase.x + (tt - 0.5f) * tongueLength;
+        float y = mouthBase.y + sin(tt * TWO_PI) * amplitude;
         tongue.addVertex(x, y);
     }
     tongue.draw();
 
     ofPopStyle();
 }
+
+
