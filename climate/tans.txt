@@ -1,37 +1,85 @@
-//--------------------------------------------------------------
-void ofApp::draw() {
-    // 天気 CA（アイコン）と、雲 CA を描く
-    drawCA();
-    drawCloudCA();
-}
+#pragma once
 
-//--------------------------------------------------------------
-void ofApp::keyPressed(int key) {
-    bool changed = false;
+#include "ofMain.h"
+#include <vector>
 
-    if (key == '1') {
-        currentWeather = WEATHER_SUNNY;
-        changed = true;
-    }
-    else if (key == '2') {
-        currentWeather = WEATHER_CLOUDY;
-        changed = true;
-    }
-    else if (key == '3') {
-        currentWeather = WEATHER_RAINY;
-        changed = true;
-    }
-    else if (key == '4') {
-        currentWeather = WEATHER_SNOWY;
-        changed = true;
-    }
-    else if (key == '5') {
-        currentWeather = WEATHER_THUNDERSTORM;
-        changed = true;
-    }
+using std::vector;
 
-    if (changed) {
-        // 天気を変えたらベクトル場も作り直す
-        generateFlowFieldForCurrentWeather();
-    }
-}
+// 天気の種類
+enum WeatherType {
+    WEATHER_SUNNY,
+    WEATHER_CLOUDY,
+    WEATHER_RAINY,
+    WEATHER_SNOWY,
+    WEATHER_THUNDERSTORM,
+};
+
+class ofApp : public ofBaseApp {
+public:
+    void setup() override;
+    void update() override;
+    void draw() override;
+    void keyPressed(int key) override;
+
+private:
+    // === 現在の天気 ===
+    WeatherType currentWeather;
+
+    // === セルオートマトン共通 ===
+    int cellSize;
+    int caCols;
+    int caRows;
+
+    // === 天気用セルオートマトン ===
+    vector<vector<int>> ca;
+    vector<vector<int>> caNext;
+    float caUpdateInterval;
+    float caTimer;
+
+    void randomizeCA();
+    void updateCA();
+    void drawCA();
+
+    // === 雲用セルオートマトン ===
+    vector<vector<int>> cloudCA;
+    vector<vector<int>> cloudNext;
+    float cloudUpdateInterval;
+    float cloudTimer;
+
+    void updateCloudCA();
+    void drawCloudCA();
+
+    // === ベクトル場（天候による風の向き・速さ） ===
+    vector<vector<ofVec2f>> flowField;  // CA グリッドと同じサイズ
+    float flowTime;                     // 経過時間（描画位置にだけ使う）
+
+    void generateFlowFieldForCurrentWeather();
+    void getFlowDirForCell(int gx, int gy, int& dx, int& dy);
+
+    // === 天気カオス制御 ===
+    double chaosX;          // ロジスティック写像の現在値 (0〜1)
+    double chaosR;          // カオスのパラメータ (3.8〜4.0あたり)
+    float  weatherTimer;    // 天気切り替え用タイマー
+    float  weatherBaseMin;  // 天気が変わる最小間隔（秒）
+    float  weatherBaseMax;  // 天気が変わる最大間隔（秒）
+
+    void stepChaos();
+    void updateWeatherByChaos();
+    void applyWeatherStep(int step, bool forceThunder);
+
+    // === 雲のブロブ描画（量子表示） ===
+    void drawCloudBlob(float cx, float cy,
+                       float baseR,
+                       const ofColor& baseColor,
+                       float seed);
+
+    // （おまけ：今は使っても使わなくてもOK）
+    void drawNoisyPolygon(float cx, float cy,
+                          float baseRadius,
+                          int sides,
+                          float rotationRad,
+                          float noiseScale,
+                          float noiseAmp,
+                          float seed,
+                          float time);
+};
