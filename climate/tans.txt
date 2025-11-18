@@ -1,355 +1,120 @@
-// === 天気用セルオートマトン ===
-vector<vector<int>>  ca;
-vector<vector<int>>  caNext;
+#pragma once
 
-// ★ 追加：各セルの「強さ」
-vector<vector<float>> caStrength;
+#include "ofMain.h"
+using std::vector;
 
-// CA の更新間隔
-float caUpdateInterval;
-float caTimer;
+// === 天気の種類 ===
+enum WeatherType {
+    WEATHER_SUNNY,
+    WEATHER_CLOUDY,
+    WEATHER_RAINY,
+    WEATHER_SNOWY,
+    WEATHER_THUNDERSTORM,
+};
 
-// ★ 追加：勝者物理のパラメータ
-float strengthGrowth;            // 勝ったときの強さ増加
-float strengthDecay;             // 1ステップごとの減衰
-float chaosClusterBaseStrength;  // カオスで生成された塊の初期強さ
-
-
-
+class ofApp : public ofBaseApp {
+public:
+    void setup();
+    void update();
+    void draw();
+    void keyPressed(int key);
 
 private:
-    ...
-    void updateCA();
-    ...
+    // =============================
+    //  天気・環境
+    // =============================
+    WeatherType currentWeather;
 
-    // ★ 追加：強さの減衰
-    void decayStrengthGrid(const vector<vector<int>>& newCA);
+    // =============================
+    //  基本 CA グリッドパラメータ
+    // =============================
+    int cellSize;
+    int caCols;
+    int caRows;
 
-    // ★ 追加：カオスでクラスタを生成
+    // =============================
+    //  天気用セルオートマトン
+    // =============================
+    vector<vector<int>>  ca;
+    vector<vector<int>>  caNext;
+
+    // ★ 各セルの強さ（勝者ルール用）
+    vector<vector<float>> caStrength;
+
+    float caUpdateInterval;
+    float caTimer;
+
+    void randomizeCA();
+    void updateCA();  // 勝者ルール＋カオス生成を含む
+    void drawCA();
+
+
+    // =============================
+    //  雲 用 CA
+    // =============================
+    vector<vector<int>>  cloudCA;
+    vector<vector<int>>  cloudNext;
+
+    float cloudUpdateInterval;
+    float cloudTimer;
+
+    void updateCloudCA();
+    void drawCloudCA();
+
+
+    // =============================
+    //  ベクトル場（天候による風）
+    // =============================
+    vector<vector<ofVec2f>> flowField;
+    float flowTime;
+
+    void generateFlowFieldForCurrentWeather();
+    void getFlowDirForCell(int gx, int gy, int& dx, int& dy);
+
+
+    // =============================
+    //  カオス天気制御
+    // =============================
+    double chaosX;      // ロジスティック写像（0〜1）
+    double chaosR;      // カオスパラメータ（3.8〜4.0）
+    float  weatherTimer;
+    float  weatherBaseMin;
+    float  weatherBaseMax;
+
+    void stepChaos();
+    void updateWeatherByChaos();
+    void applyWeatherStep(int step, bool forceThunder);
+
+
+    // =============================
+    //  雲の量子ブロブ
+    // =============================
+    void drawCloudBlob(float cx, float cy,
+        float baseR,
+        const ofColor& baseColor,
+        float seed);
+
+    void drawNoisyPolygon(float cx, float cy,
+        float baseRadius,
+        int sides,
+        float rotationRad,
+        float noiseScale,
+        float noiseAmp,
+        float seed,
+        float time);
+
+
+    // =============================
+    //  勝者ルール用パラメータ
+    // =============================
+    float strengthGrowth;            // 勝てば強くなる増加量
+    float strengthDecay;             // 時間による減衰
+    float chaosClusterBaseStrength;  // カオスクラスタ初期強さ
+
+
+    // =============================
+    //  カオスクラスタ生成（新しい勢力）
+    // =============================
     void spawnChaosClustersByChaos(vector<vector<int>>& movedGrid);
-
-    // ★ 追加：1クラスタを (cx,cy) 周辺に生成
     void spawnClusterAt(int cx, int cy, vector<vector<int>>& movedGrid);
-
-
-
-
-
-void ofApp::setup() {
-    ofSetBackgroundColor(0);
-    currentWeather = WEATHER_SUNNY;
-
-    // === セルオートマトン初期化 ===
-    cellSize = 20;
-    caCols = ofGetWidth() / cellSize;
-    caRows = ofGetHeight() / cellSize;
-
-    ca.assign(caRows, vector<int>(caCols, 0));
-    caNext.assign(caRows, vector<int>(caCols, 0));
-    randomizeCA();
-
-    // ★ 強さグリッド初期化
-    caStrength.assign(caRows, vector<float>(caCols, 0.0f));
-    for (int y = 0; y < caRows; ++y) {
-        for (int x = 0; x < caCols; ++x) {
-            if (ca[y][x] == 1) {
-                caStrength[y][x] = 1.0f;   // 初期生存セルの強さ
-            }
-        }
-    }
-
-    caUpdateInterval = 0.2f;
-    caTimer = 0.0f;
-
-    // === 雲用 CA 初期化 ===
-    cloudCA.assign(caRows, vector<int>(caCols, 0));
-    cloudNext.assign(caRows, vector<int>(caCols, 0));
-    cloudUpdateInterval = 0.30f;
-    cloudTimer = 0.0f;
-
-    // === ベクトル場初期化 ===
-    flowField.assign(caRows, vector<ofVec2f>(caCols, ofVec2f(0, 0)));
-    flowTime = 0.0f;
-    generateFlowFieldForCurrentWeather();
-
-    // === 天気カオス制御の初期化 ===
-    chaosR = 3.9;
-    chaosX = ofRandom(0.1, 0.9);
-    weatherTimer   = 0.0f;
-    weatherBaseMin = 5.0f;
-    weatherBaseMax = 25.0f;
-
-    // ★ 勝者ルール用パラメータ
-    strengthGrowth           = 0.08f;  // 勝つたびに +0.08
-    strengthDecay            = 0.01f;  // 1ステップごとに -1%
-    chaosClusterBaseStrength = 1.5f;   // カオス塊は強めにスタート
-}
-
-
-
-
-
-void ofApp::setup() {
-    ofSetBackgroundColor(0);
-    currentWeather = WEATHER_SUNNY;
-
-    // === セルオートマトン初期化 ===
-    cellSize = 20;
-    caCols = ofGetWidth() / cellSize;
-    caRows = ofGetHeight() / cellSize;
-
-    ca.assign(caRows, vector<int>(caCols, 0));
-    caNext.assign(caRows, vector<int>(caCols, 0));
-    randomizeCA();
-
-    // ★ 強さグリッド初期化
-    caStrength.assign(caRows, vector<float>(caCols, 0.0f));
-    for (int y = 0; y < caRows; ++y) {
-        for (int x = 0; x < caCols; ++x) {
-            if (ca[y][x] == 1) {
-                caStrength[y][x] = 1.0f;   // 初期生存セルの強さ
-            }
-        }
-    }
-
-    caUpdateInterval = 0.2f;
-    caTimer = 0.0f;
-
-    // === 雲用 CA 初期化 ===
-    cloudCA.assign(caRows, vector<int>(caCols, 0));
-    cloudNext.assign(caRows, vector<int>(caCols, 0));
-    cloudUpdateInterval = 0.30f;
-    cloudTimer = 0.0f;
-
-    // === ベクトル場初期化 ===
-    flowField.assign(caRows, vector<ofVec2f>(caCols, ofVec2f(0, 0)));
-    flowTime = 0.0f;
-    generateFlowFieldForCurrentWeather();
-
-    // === 天気カオス制御の初期化 ===
-    chaosR = 3.9;
-    chaosX = ofRandom(0.1, 0.9);
-    weatherTimer   = 0.0f;
-    weatherBaseMin = 5.0f;
-    weatherBaseMax = 25.0f;
-
-    // ★ 勝者ルール用パラメータ
-    strengthGrowth           = 0.08f;  // 勝つたびに +0.08
-    strengthDecay            = 0.01f;  // 1ステップごとに -1%
-    chaosClusterBaseStrength = 1.5f;   // カオス塊は強めにスタート
-}
-
-
-
-
-
-// CA 更新：B3/S23 → ベクトル場に沿って移動（強さで勝者決定）→ カオスクラスタ生成
-void ofApp::updateCA() {
-    if (caCols <= 0 || caRows <= 0) return;
-
-    // ---------- 1. ライフゲームの生死判定 ----------
-    for (int y = 0; y < caRows; y++) {
-        for (int x = 0; x < caCols; x++) {
-
-            int aliveNeighbors = 0;
-            for (int j = -1; j <= 1; j++) {
-                for (int i = -1; i <= 1; i++) {
-                    if (i == 0 && j == 0) continue;
-
-                    int nx = (x + i + caCols) % caCols;
-                    int ny = (y + j + caRows) % caRows;
-
-                    aliveNeighbors += ca[ny][nx];
-                }
-            }
-
-            int current   = ca[y][x];
-            int nextState = 0;
-
-            if (current == 1) {
-                if (aliveNeighbors == 2 || aliveNeighbors == 3) {
-                    nextState = 1;
-                } else {
-                    nextState = 0;
-                    // 死んだセルから雲 CA を発生させる
-                    cloudCA[y][x] = 1;
-                }
-            } else {
-                if (aliveNeighbors == 3) {
-                    nextState = 1;
-                } else {
-                    nextState = 0;
-                }
-            }
-
-            caNext[y][x] = nextState;
-            if (nextState == 0) {
-                // ここではまだ位置は変えないので、強さは後で整理
-            }
-        }
-    }
-
-    // ---------- 2. ベクトル場に沿った移動＋「強さ」で勝者決定 ----------
-    vector<vector<int>>   movedGrid(caRows, vector<int>(caCols, 0));
-    vector<vector<float>> newStrength(caRows, vector<float>(caCols, 0.0f));
-
-    for (int y = 0; y < caRows; y++) {
-        for (int x = 0; x < caCols; x++) {
-
-            if (caNext[y][x] != 1) continue;
-
-            // このセルの現在の強さ
-            float s = caStrength[y][x];
-            if (s <= 0.0f) s = 1.0f;  // 新規 or 弱すぎるセルには最低強さ
-
-            // ベクトル場から移動先を決定
-            int dx = 0, dy = 0;
-            getFlowDirForCell(x, y, dx, dy);
-
-            int tx = (x + dx + caCols) % caCols;
-            int ty = (y + dy + caRows) % caRows;
-
-            // 勝者ルール：強さが大きい方が勝者
-            float boosted = s + strengthGrowth;  // 勝ったことで少し強くなる
-            float& slotStrength = newStrength[ty][tx];
-
-            if (boosted > slotStrength) {
-                // 既存の候補より強ければ上書き
-                slotStrength   = boosted;
-                movedGrid[ty][tx] = 1;
-            }
-            // 同じくらいならたまに入れ替えてもいいけど、
-            // 「勝者が勝ち続ける」感を出したいのでここでは完全に強さ優先。
-        }
-    }
-
-    // ---------- 3. カオス＋クラスタ生成（新しい勢力） ----------
-    spawnChaosClustersByChaos(movedGrid);
-
-    // spawnChaosClustersByChaos 内で caStrength も書き換えるので、
-    // newStrength とマージする必要がある。
-    // まず newStrength を caStrength に反映しつつ減衰をかける。
-    for (int y = 0; y < caRows; y++) {
-        for (int x = 0; x < caCols; x++) {
-            if (movedGrid[y][x] == 1) {
-                float s = newStrength[y][x];
-                if (s <= 0.0f) {
-                    // カオスクラスタなどで先に強さが入っている場合はそのまま
-                    s = caStrength[y][x];
-                    if (s <= 0.0f) s = 1.0f;
-                }
-                // 減衰をかける（勝ち続けると増えるが、時間とともに少し落ちる）
-                s *= (1.0f - strengthDecay);
-                if (s < 0.1f) s = 0.1f;       // 最低ライン
-                if (s > 3.0f) s = 3.0f;       // 上限
-                caStrength[y][x] = s;
-            } else {
-                caStrength[y][x] = 0.0f;      // 死んだセルは強さもゼロ
-            }
-        }
-    }
-
-    // ---------- 4. 新しい CA を確定 ----------
-    ca = movedGrid;
-}
-
-
-
-
-
-
-
-
-// 画面がスカスカなとき、カオスXに応じて強いクラスタをいくつか生成
-void ofApp::spawnChaosClustersByChaos(vector<vector<int>>& movedGrid) {
-    int aliveCount = 0;
-    for (int y = 0; y < caRows; y++) {
-        for (int x = 0; x < caCols; x++) {
-            if (movedGrid[y][x] == 1) {
-                aliveCount++;
-            }
-        }
-    }
-
-    int totalCells    = caCols * caRows;
-    int minAliveCells = static_cast<int>(totalCells * 0.03f); // 3% 未満ならほぼ壊滅
-
-    if (aliveCount >= minAliveCells) {
-        return;  // まだ十分いるので生成しない
-    }
-
-    // chaosX (0〜1) からクラスタ数を決める
-    int maxClusters  = 5;
-    int clusterCount = ofMap(chaosX, 0.0f, 1.0f, 1, maxClusters, true);
-
-    for (int c = 0; c < clusterCount; ++c) {
-        bool placed = false;
-
-        for (int tries = 0; tries < 60; ++tries) {
-            int cx = ofRandom(caCols);
-            int cy = ofRandom(caRows);
-
-            if (movedGrid[cy][cx] == 1) continue;
-
-            // 近傍の生存数を見て「スカスカなところ」を優先
-            int neighbors = 0;
-            for (int j = -2; j <= 2; j++) {
-                for (int i = -2; i <= 2; i++) {
-                    if (i == 0 && j == 0) continue;
-                    int nx = (cx + i + caCols) % caCols;
-                    int ny = (cy + j + caRows) % caRows;
-                    neighbors += movedGrid[ny][nx];
-                }
-            }
-
-            if (neighbors <= 2) {
-                // ここに1クラスタを置く
-                spawnClusterAt(cx, cy, movedGrid);
-                placed = true;
-                break;
-            }
-        }
-
-        if (!placed) {
-            // どうしても見つからなければどこかランダムに置く
-            int cx = ofRandom(caCols);
-            int cy = ofRandom(caRows);
-            spawnClusterAt(cx, cy, movedGrid);
-        }
-    }
-}
-
-
-
-
-
-
-// (cx,cy) 周辺に「生きやすい最小クラスタ」を生成し、強さを高めに設定
-void ofApp::spawnClusterAt(int cx, int cy, vector<vector<int>>& movedGrid) {
-    // 十字型パターン＋中心
-    static const int OFFS[5][2] = {
-        { 0,  0},
-        { 1,  0},
-        {-1,  0},
-        { 0,  1},
-        { 0, -1}
-    };
-
-    for (int k = 0; k < 5; ++k) {
-        int nx = (cx + OFFS[k][0] + caCols) % caCols;
-        int ny = (cy + OFFS[k][1] + caRows) % caRows;
-
-        movedGrid[ny][nx]   = 1;
-        caStrength[ny][nx]  = chaosClusterBaseStrength; // 強めスタート
-    }
-}
-
-
-
-
-
-
-
-
-
-
+};
