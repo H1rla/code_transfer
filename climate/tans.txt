@@ -2,6 +2,248 @@
 
 
 
+class ofApp : public ofBaseApp {
+public:
+    // 既存の宣言はそのまま…
+
+    void updateCA();  // これを書き換える
+
+    // ★ 追加：グリッド座標 (gx,gy) に対して、
+    //    現在の天気に応じた「整数ベクトル方向 (dx,dy)」を返すヘルパー
+    void getFlowDirForCell(int gx, int gy, int& dx, int& dy);
+};
+
+
+//--------------------------------------------------------------
+// グリッド座標 (gx,gy) に対して、天候ごとの移動方向 (dx,dy) を返す。
+// 1ステップで何マス動くか：基本は -1,0,+1 のいずれか。
+void ofApp::getFlowDirForCell(int gx, int gy, int& dx, int& dy) {
+    dx = 0;
+    dy = 0;
+
+    // 安全策：列・行数チェック
+    if (caCols <= 0 || caRows <= 0) return;
+
+    switch (currentWeather) {
+    case WEATHER_SUNNY:
+        // 晴れ：流れなし（その場にとどまる）
+        dx = 0;
+        dy = 0;
+        break;
+
+    case WEATHER_CLOUDY:
+    {
+        // 曇り：縦方向に4分割して、左右に流す
+        int bandX = (gx * 4) / caCols; // 0〜3
+        if (bandX % 2 == 0) {
+            dx = 1;   // 右へ
+        } else {
+            dx = -1;  // 左へ
+        }
+        dy = 0;
+        break;
+    }
+
+    case WEATHER_RAINY:
+    {
+        // 雨：縦2×横2のざっくり分割で斜め下方向
+        int bandX = (gx * 2) / caCols; // 0 or 1
+        int bandY = (gy * 2) / caRows; // 0 or 1
+
+        dy = 1; // 下方向は固定
+
+        if (bandX == 0) {
+            dx = -1; // 左下
+        } else {
+            dx = 1;  // 右下
+        }
+
+        // 上半分と下半分で、少しだけ左右を変えるなども可能
+        // （今はシンプルにこのまま）
+        (void)bandY;
+        break;
+    }
+
+    case WEATHER_SNOWY:
+    {
+        // 雪：縦4分割で右下/左下を交互、ゆっくり落ちるイメージ
+        int bandX = (gx * 4) / caCols; // 0〜3
+
+        dy = 1; // 下へ
+
+        if (bandX % 2 == 0) {
+            dx = 1;  // 右下
+        } else {
+            dx = -1; // 左下
+        }
+        break;
+    }
+
+    case WEATHER_THUNDERSTORM:
+    {
+        // 雷：縦8×横8の細かいグリッドで、4方向の斜めベクトル
+        int bx = (gx * 8) / caCols; // 0〜7
+        int by = (gy * 8) / caRows; // 0〜7
+
+        // x 偶数/奇数で左右、y 偶数/奇数で上下を決定
+        dx = (bx % 2 == 0) ? -1 : 1;
+        dy = (by % 2 == 0) ? -1 : 1;
+        break;
+    }
+
+    default:
+        dx = 0;
+        dy = 0;
+        break;
+    }
+}
+
+
+//--------------------------------------------------------------
+// 天気 CA 更新：
+// 1. まず通常の Game of Life (B3/S23) で「次フレームの生死」を決める
+// 2. 生きるセルだけ、天候ベクトル場に沿って 1 マス移動させる
+//    （同じマスに複数来たら「勝者ルール」で 1 つだけ残す）
+// 3. 全体の生存セルが少なすぎるとき、カオス chaosX を使って
+//    スカスカな場所に新しい「塊」を少しだけ生成する
+void ofApp::updateCA() {
+    if (caCols <= 0 || caRows <= 0) return;
+
+    // ---------- 1. ライフゲームの生死判定（ベース） ----------
+    // ca を元に B3/S23 ルールで「生きる/死ぬ」を caNext に書き込む
+    for (int y = 0; y < caRows; y++) {
+        for (int x = 0; x < caCols; x++) {
+
+            int aliveNeighbors = 0;
+
+            // 8近傍（トーラス境界）
+            for (int j = -1; j <= 1; j++) {
+                for (int i = -1; i <= 1; i++) {
+                    if (i == 0 && j == 0) continue; // 自分自身
+
+                    int nx = (x + i + caCols) % caCols;
+                    int ny = (y + j + caRows) % caRows;
+
+                    aliveNeighbors += ca[ny][nx];
+                }
+            }
+
+            int current = ca[y][x];
+            int nextState = 0;
+
+            if (current == 1) {
+                // 生きているセル：近傍が 2 or 3 なら生存
+                if (aliveNeighbors == 2 || aliveNeighbors == 3) {
+                    nextState = 1;
+                } else {
+                    nextState = 0;
+                }
+            } else {
+                // 死んでいるセル：近傍が 3 なら誕生
+                if (aliveNeighbors == 3) {
+                    nextState = 1;
+                } else {
+                    nextState = 0;
+                }
+            }
+
+            caNext[y][x] = nextState;
+        }
+    }
+
+    // ---------- 2. ベクトル場に沿った移動 ＋ 勝者ルール ----------
+    // movedGrid: 移動後の CA 状態
+    // candidateCount: 各マスに「何セル来ようとしたか」のカウント
+    vector<vector<int>> movedGrid(caRows, vector<int>(caCols, 0));
+    vector<vector<int>> candidateCount(caRows, vector<int>(caCols, 0));
+
+    for (int y = 0; y < caRows; y++) {
+        for (int x = 0; x < caCols; x++) {
+
+            if (caNext[y][x] != 1) {
+                continue; // 死んでいる予定のセルは移動しない
+            }
+
+            // このセルが生き残るので、ベクトル場に沿って移動先を決める
+            int dx = 0, dy = 0;
+            getFlowDirForCell(x, y, dx, dy);
+
+            int tx = (x + dx + caCols) % caCols;
+            int ty = (y + dy + caRows) % caRows;
+
+            // 勝者ルール：このマスに来ようとした回数を増やす
+            int& cnt = candidateCount[ty][tx];
+            cnt++;
+
+            // Reservoir sampling 的に「たまに勝者を入れ替える」ランダム勝者
+            float r = ofRandom(1.0f);
+            if (r < 1.0f / (float)cnt) {
+                // 今の候補を勝者にする
+                movedGrid[ty][tx] = 1;
+            }
+            // それ以外の場合は、すでに入っているもの（もしあれば）を勝者として残す
+        }
+    }
+
+    // ---------- 3. カオス＋スカスカ領域への再生成 ----------
+
+    // まず今の生存セル数を数える
+    int aliveCount = 0;
+    for (int y = 0; y < caRows; y++) {
+        for (int x = 0; x < caCols; x++) {
+            if (movedGrid[y][x] == 1) {
+                aliveCount++;
+            }
+        }
+    }
+
+    // 「少ない」とみなす閾値（全体の 2〜3% くらい）
+    int totalCells = caCols * caRows;
+    int minAliveCells = static_cast<int>(totalCells * 0.03f); // 3% 以下なら「ほぼ消えかけ」
+
+    if (aliveCount < minAliveCells) {
+        // chaosX を使って「どれくらい新しい塊を落とすか」を決める
+        // chaosX は 0〜1 の値なので、
+        int maxSeeds = 6; // 最大 6 か所くらい
+        int seedCount = ofMap(chaosX, 0.0f, 1.0f, 1, maxSeeds, true);
+
+        for (int s = 0; s < seedCount; s++) {
+            // スカスカな場所（近傍の生存セルが少ないところ）を探す
+            bool placed = false;
+            for (int tries = 0; tries < 50; tries++) {
+                int rx = ofRandom(caCols);
+                int ry = ofRandom(caRows);
+
+                if (movedGrid[ry][rx] == 1) continue; // すでに生きているところは避ける
+
+                // 近傍の生存数を数える（ここでは8近傍）
+                int neighbors = 0;
+                for (int j = -1; j <= 1; j++) {
+                    for (int i = -1; i <= 1; i++) {
+                        if (i == 0 && j == 0) continue;
+                        int nx = (rx + i + caCols) % caCols;
+                        int ny = (ry + j + caRows) % caRows;
+                        neighbors += movedGrid[ny][nx];
+                    }
+                }
+
+                // ほとんど誰もいない場所（0〜1）だけに生成
+                if (neighbors <= 1) {
+                    movedGrid[ry][rx] = 1;
+                    placed = true;
+                    break;
+                }
+            }
+            (void)placed; // 使わないけど、将来デバッグに使える
+        }
+    }
+
+    // ---------- 4. 次ステップの CA として確定 ----------
+    ca = movedGrid;
+}
+
+
+
 
 
 
