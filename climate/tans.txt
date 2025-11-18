@@ -1,79 +1,545 @@
-#pragma once
+#include "ofApp.h"
+#include <cmath>
 
-#include "ofMain.h"
-#include <vector>
-#include <algorithm>
+//--------------------------------------------------------------
+void ofApp::setup() {
+    ofSetBackgroundColor(0);
 
-using std::vector;
+    currentWeather = WEATHER_SUNNY;
 
-// 天気の種類
-enum WeatherType {
-    WEATHER_SUNNY = 0,
-    WEATHER_CLOUDY,
-    WEATHER_RAINY,
-    WEATHER_SNOWY,
-    WEATHER_THUNDERSTORM
-};
+    // === CA グリッド設定 ===
+    cellSize = 20;
+    caCols = ofGetWidth()  / cellSize;
+    caRows = ofGetHeight() / cellSize;
 
-class ofApp : public ofBaseApp {
-public:
-    void setup() override;
-    void update() override;
-    void draw() override;
-    void keyPressed(int key) override;
+    if (caCols < 1) caCols = 1;
+    if (caRows < 1) caRows = 1;
 
-private:
-    // === 現在の天気 ===
-    WeatherType currentWeather;
+    // ここでサイズを一度だけ確定させる
+    ca.assign(caRows,       vector<int>(caCols, 0));
+    caNext.assign(caRows,   vector<int>(caCols, 0));
+    caHP.assign(caRows,     vector<int>(caCols, 0));
+    cloudCA.assign(caRows,  vector<int>(caCols, 0));
+    flowField.assign(caRows,vector<ofVec2f>(caCols, ofVec2f(0, 0)));
 
-    // === セルオートマトン共通 ===
-    int cellSize;
-    int caCols;
-    int caRows;
+    maxHP = 5; // 多重は最大5段
 
-    // 天候 CA（主役）
-    vector<vector<int>> ca;      // 現在の生死
-    vector<vector<int>> caNext;  // B3/S23 計算用
+    randomizeCA();
 
-    // HP（勝者レベルとして扱う） 0〜maxHP
-    vector<vector<int>> caHP;
-    int maxHP;
+    caUpdateInterval    = 0.2f;
+    caTimer             = 0.0f;
+    cloudUpdateInterval = 0.25f;
+    cloudTimer          = 0.0f;
 
-    float caUpdateInterval;
-    float caTimer;
+    flowTime = 0.0f;
+    generateFlowFieldForCurrentWeather();
 
-    // === 雲 CA（残光的な雲） ===
-    vector<vector<int>> cloudCA;
-    float cloudUpdateInterval;
-    float cloudTimer;
+    weatherChangeTimer    = 0.0f;
+    weatherChangeInterval = 10.0f; // 10秒ごとに次の天候へ
+}
 
-    // === ベクトル場（天候による風の向き） ===
-    vector<vector<ofVec2f>> flowField;
-    float flowTime; // ノイズ時間として使用
+//--------------------------------------------------------------
+void ofApp::randomizeCA() {
+    for (int y = 0; y < caRows; ++y) {
+        for (int x = 0; x < caCols; ++x) {
+            int alive = (ofRandom(1.0f) < 0.5f) ? 1 : 0;
+            ca[y][x]    = alive;
+            caHP[y][x]  = alive ? 1 : 0;
+            cloudCA[y][x] = 0;
+        }
+    }
+}
 
-    // === 天候の周期的切り替え（テスト用） ===
-    float weatherChangeTimer;
-    float weatherChangeInterval; // 例: 10秒ごとに変更
+//--------------------------------------------------------------
+void ofApp::update() {
 
-    // ---------- 内部関数 ----------
-    void randomizeCA();
+    float dt = ofGetLastFrameTime();
+    if (dt <= 0.0f) dt = 1.0f / 60.0f;
 
-    // 天候 CA の更新
-    void updateCA();
+    // === 天候ごとの CA / 雲 の更新間隔 ===
+    switch (currentWeather) {
+    case WEATHER_SUNNY:
+        caUpdateInterval    = 0.25f;
+        cloudUpdateInterval = 0.30f;
+        break;
+    case WEATHER_CLOUDY:
+        caUpdateInterval    = 0.20f;
+        cloudUpdateInterval = 0.28f;
+        break;
+    case WEATHER_RAINY:
+        caUpdateInterval    = 0.16f;
+        cloudUpdateInterval = 0.24f;
+        break;
+    case WEATHER_SNOWY:
+        caUpdateInterval    = 0.18f;
+        cloudUpdateInterval = 0.26f;
+        break;
+    case WEATHER_THUNDERSTORM:
+        caUpdateInterval    = 0.10f;
+        cloudUpdateInterval = 0.20f;
+        break;
+    }
 
-    // 雲 CA の更新（残光）
-    void updateCloudCA();
+    // ベクトル場の時間（ノイズの時間）
+    flowTime += dt;
+    updateFlowFieldOverTime();
 
-    // 描画
-    void drawCA();
-    void drawCloudCA();
+    // === 天候 CA 更新 ===
+    caTimer += dt;
+    if (caTimer >= caUpdateInterval) {
+        updateCA();
+        caTimer = 0.0f;
+    }
 
-    // ベクトル場生成（モデルC：天候方向 + ノイズ揺らぎ）
-    void generateFlowFieldForCurrentWeather();
+    // === 雲 CA 更新 ===
+    cloudTimer += dt;
+    if (cloudTimer >= cloudUpdateInterval) {
+        updateCloudCA();
+        cloudTimer = 0.0f;
+    }
 
-    // ベクトル場の時間変化（ここでは毎フレーム再生成する）
-    void updateFlowFieldOverTime();
+    // === 天候の周期的切り替え ===
+    weatherChangeTimer += dt;
+    if (weatherChangeTimer >= weatherChangeInterval) {
+        weatherChangeTimer = 0.0f;
 
-    // グリッド座標 (gx, gy) に対して flowField から整数方向 (dx, dy) を得る
-    void getFlowDirForCell(int gx, int gy, int& dx, int& dy);
-};
+        switch (currentWeather) {
+        case WEATHER_SUNNY:
+            currentWeather = WEATHER_CLOUDY;
+            break;
+        case WEATHER_CLOUDY:
+            currentWeather = WEATHER_RAINY;
+            break;
+        case WEATHER_RAINY:
+            currentWeather = WEATHER_SNOWY;
+            break;
+        case WEATHER_SNOWY:
+            currentWeather = WEATHER_THUNDERSTORM;
+            break;
+        case WEATHER_THUNDERSTORM:
+            currentWeather = WEATHER_SUNNY;
+            break;
+        }
+
+        generateFlowFieldForCurrentWeather();
+    }
+}
+
+//--------------------------------------------------------------
+void ofApp::updateFlowFieldOverTime() {
+    // 今回は毎フレーム「現在の天候＋時間」を使って再生成する
+    generateFlowFieldForCurrentWeather();
+}
+
+//--------------------------------------------------------------
+void ofApp::getFlowDirForCell(int gx, int gy, int& dx, int& dy) {
+    dx = 0;
+    dy = 0;
+
+    int rows = static_cast<int>(flowField.size());
+    if (rows == 0) return;
+    int cols = static_cast<int>(flowField[0].size());
+    if (cols == 0) return;
+
+    if (gx < 0 || gx >= cols || gy < 0 || gy >= rows) return;
+
+    ofVec2f v = flowField[gy][gx];
+
+    const float threshold = 0.25f;
+
+    if (v.x >  threshold) dx =  1;
+    else if (v.x < -threshold) dx = -1;
+
+    if (v.y >  threshold) dy =  1;
+    else if (v.y < -threshold) dy = -1;
+}
+
+//--------------------------------------------------------------
+void ofApp::generateFlowFieldForCurrentWeather() {
+
+    int rows = static_cast<int>(flowField.size());
+    if (rows == 0) return;
+    int cols = static_cast<int>(flowField[0].size());
+    if (cols == 0) return;
+
+    float baseNoiseScale = 0.06f;
+    float t = flowTime;  // 時間で揺らぎ
+
+    for (int y = 0; y < rows; ++y) {
+        for (int x = 0; x < cols; ++x) {
+
+            ofVec2f mainDir(0, 0);
+            float mainStrength  = 0.0f;
+            float noiseStrength = 0.0f;
+
+            switch (currentWeather) {
+
+            case WEATHER_SUNNY:
+                mainDir.set(0, 0);
+                mainStrength  = 0.0f;
+                noiseStrength = 0.2f;
+                break;
+
+            case WEATHER_CLOUDY:
+                // 斜め30度くらいで左右に
+                mainDir.set(1.0f, -0.5f);
+                mainDir.normalize();
+                mainStrength  = 0.7f;
+                noiseStrength = 0.3f;
+                break;
+
+            case WEATHER_RAINY:
+                // ほぼ下方向
+                mainDir.set(0.0f, 1.0f);
+                mainStrength  = 0.7f;
+                noiseStrength = 0.3f;
+                break;
+
+            case WEATHER_SNOWY:
+                // 45度斜め下
+                mainDir.set(1.0f, 1.0f);
+                mainDir.normalize();
+                mainStrength  = 0.6f;
+                noiseStrength = 0.4f;
+                break;
+
+            case WEATHER_THUNDERSTORM:
+                // 激しい右上方向＋強ノイズ
+                mainDir.set(1.0f, -1.0f);
+                mainDir.normalize();
+                mainStrength  = 0.5f;
+                noiseStrength = 0.5f;
+                break;
+            }
+
+            // ノイズ方向
+            float nx = ofNoise(x * baseNoiseScale,
+                               y * baseNoiseScale,
+                               t * 0.4f);
+            float ny = ofNoise((x + 1000) * baseNoiseScale,
+                               (y + 1000) * baseNoiseScale,
+                               t * 0.4f);
+
+            ofVec2f noiseDir(nx - 0.5f, ny - 0.5f);
+            if (noiseDir.lengthSquared() > 0.0001f) {
+                noiseDir.normalize();
+            }
+
+            ofVec2f v = mainDir * mainStrength + noiseDir * noiseStrength;
+            if (v.lengthSquared() > 0.0001f) {
+                v.normalize();
+            }
+
+            flowField[y][x] = v;
+        }
+    }
+}
+
+//--------------------------------------------------------------
+void ofApp::updateCA() {
+
+    int rows = caRows;
+    int cols = caCols;
+    if (rows <= 0 || cols <= 0) return;
+
+    // 念のためバッファ・HPのサイズをチェック
+    if ((int)caNext.size() != rows || (int)caNext[0].size() != cols) {
+        caNext.assign(rows, vector<int>(cols, 0));
+    }
+    if ((int)caHP.size() != rows || (int)caHP[0].size() != cols) {
+        caHP.assign(rows, vector<int>(cols, 0));
+    }
+
+    // ---------- 1. B3/S23 ----------
+    for (int y = 0; y < rows; ++y) {
+        for (int x = 0; x < cols; ++x) {
+
+            int aliveNeighbors = 0;
+
+            for (int j = -1; j <= 1; ++j) {
+                for (int i = -1; i <= 1; ++i) {
+                    if (i == 0 && j == 0) continue;
+
+                    int nx = (x + i + cols) % cols;
+                    int ny = (y + j + rows) % rows;
+
+                    aliveNeighbors += ca[ny][nx];
+                }
+            }
+
+            int current   = ca[y][x];
+            int nextState = 0;
+
+            if (current == 1) {
+                if (aliveNeighbors == 2 || aliveNeighbors == 3) {
+                    nextState = 1;
+                } else {
+                    nextState = 0;
+                }
+            } else {
+                if (aliveNeighbors == 3) {
+                    nextState = 1;
+                } else {
+                    nextState = 0;
+                }
+            }
+
+            // 完全な死滅防止用のノイズ
+            if (nextState == 0 && aliveNeighbors == 0) {
+                if (ofRandom(1.0f) < 0.001f) {
+                    nextState = 1;
+                }
+            }
+
+            caNext[y][x] = nextState;
+        }
+    }
+
+    // ---------- 2. ベクトル場 + 勝者ルール(50%) + HP ----------
+    vector<vector<int>> moved(rows, vector<int>(cols, 0));
+    vector<vector<int>> newHP(rows, vector<int>(cols, 0));
+
+    for (int y = 0; y < rows; ++y) {
+        for (int x = 0; x < cols; ++x) {
+
+            if (caNext[y][x] != 1) continue;
+
+            int dx = 0, dy = 0;
+            getFlowDirForCell(x, y, dx, dy);
+
+            int tx = (x + dx + cols) % cols;
+            int ty = (y + dy + rows) % rows;
+
+            int oldHP = caHP[y][x];
+            if (oldHP <= 0) oldHP = 1;
+
+            if (moved[ty][tx] == 0) {
+                moved[ty][tx] = 1;
+                newHP[ty][tx] = std::min(oldHP + 1, maxHP);
+            } else {
+                // 競合：50%で新セルが勝つ
+                if (ofRandom(1.0f) < 0.5f) {
+                    moved[ty][tx] = 1;
+                    newHP[ty][tx] = std::min(oldHP + 1, maxHP);
+                } else {
+                    newHP[ty][tx] = std::min(newHP[ty][tx] + 1, maxHP);
+                }
+            }
+        }
+    }
+
+    // ---------- 3. スカスカ領域に少し種を撒く ----------
+    int aliveCount = 0;
+    for (int y = 0; y < rows; ++y)
+        for (int x = 0; x < cols; ++x)
+            if (moved[y][x] == 1) aliveCount++;
+
+    int totalCells = rows * cols;
+    int minAlive   = static_cast<int>(totalCells * 0.02f);
+
+    if (aliveCount < minAlive) {
+        int seedCount = 5;
+        for (int s = 0; s < seedCount; ++s) {
+            int rx = static_cast<int>(ofRandom(cols));
+            int ry = static_cast<int>(ofRandom(rows));
+            moved[ry][rx] = 1;
+            newHP[ry][rx] = 1;
+        }
+    }
+
+    ca   = moved;
+    caHP = newHP;
+}
+
+//--------------------------------------------------------------
+void ofApp::updateCloudCA() {
+
+    int rows = caRows;
+    int cols = caCols;
+    if (rows <= 0 || cols <= 0) return;
+
+    if ((int)cloudCA.size() != rows || (int)cloudCA[0].size() != cols) {
+        cloudCA.assign(rows, vector<int>(cols, 0));
+    }
+
+    for (int y = 0; y < rows; ++y) {
+        for (int x = 0; x < cols; ++x) {
+            if (ca[y][x] == 1) {
+                cloudCA[y][x] = 3;
+            } else {
+                if (cloudCA[y][x] > 0) cloudCA[y][x]--;
+            }
+        }
+    }
+}
+
+//--------------------------------------------------------------
+void ofApp::draw() {
+    drawCA();
+    drawCloudCA();
+}
+
+//--------------------------------------------------------------
+void ofApp::drawCA() {
+
+    int rows = caRows;
+    int cols = caCols;
+    if (rows <= 0 || cols <= 0) return;
+
+    for (int y = 0; y < rows; ++y) {
+        for (int x = 0; x < cols; ++x) {
+
+            if (ca[y][x] == 0) continue;
+
+            float cx = x * cellSize + cellSize * 0.5f;
+            float cy = y * cellSize + cellSize * 0.5f;
+            float baseR = cellSize * 0.45f;
+
+            ofColor baseColor;
+            switch (currentWeather) {
+            case WEATHER_SUNNY:        baseColor = ofColor(255,240,150); break;
+            case WEATHER_CLOUDY:       baseColor = ofColor(190,190,210); break;
+            case WEATHER_RAINY:        baseColor = ofColor(100,140,255); break;
+            case WEATHER_SNOWY:        baseColor = ofColor(230,250,255); break;
+            case WEATHER_THUNDERSTORM: baseColor = ofColor(255,230,80);  break;
+            default:                   baseColor = ofColor(255);         break;
+            }
+
+            int hp = caHP[y][x];
+            if (hp <= 0) hp = 1;
+            int rings = hp;
+
+            float radius = baseR;
+
+            for (int k = 0; k < rings; ++k) {
+
+                float t = (float)k / (float)rings;
+                ofColor c = baseColor;
+                c.lerp(ofColor::white, t * 0.5f);
+                ofSetColor(c);
+
+                float r = radius;
+
+                switch (currentWeather) {
+
+                case WEATHER_SUNNY:
+                    ofNoFill();
+                    ofDrawCircle(cx, cy, r);
+                    ofFill();
+                    break;
+
+                case WEATHER_THUNDERSTORM:
+                    ofNoFill();
+                    ofDrawTriangle(
+                        cx,     cy - r,
+                        cx - r, cy + r,
+                        cx + r, cy + r
+                    );
+                    ofFill();
+                    break;
+
+                case WEATHER_CLOUDY:
+                {
+                    float w0 = r * 3.0f;
+                    float h0 = r * 1.6f;
+                    float skew = w0 * 0.3f;
+                    ofNoFill();
+                    ofDrawLine(cx - w0/2 + skew, cy - h0/2,
+                               cx + w0/2 + skew, cy - h0/2);
+                    ofDrawLine(cx + w0/2 + skew, cy - h0/2,
+                               cx + w0/2 - skew, cy + h0/2);
+                    ofDrawLine(cx + w0/2 - skew, cy + h0/2,
+                               cx - w0/2 - skew, cy + h0/2);
+                    ofDrawLine(cx - w0/2 - skew, cy + h0/2,
+                               cx - w0/2 + skew, cy - h0/2);
+                    ofFill();
+                }
+                break;
+
+                case WEATHER_RAINY:
+                    ofNoFill();
+                    ofDrawLine(cx,     cy - r, cx + r, cy);
+                    ofDrawLine(cx + r, cy,     cx,     cy + r);
+                    ofDrawLine(cx,     cy + r, cx - r, cy);
+                    ofDrawLine(cx - r, cy,     cx,     cy - r);
+                    ofFill();
+                    break;
+
+                case WEATHER_SNOWY:
+                {
+                    ofNoFill();
+                    ofPolyline poly;
+                    for (int i = 0; i < 6; ++i) {
+                        float angle = TWO_PI * i / 6.0f;
+                        poly.addVertex(cx + cos(angle)*r,
+                                       cy + sin(angle)*r);
+                    }
+                    poly.close();
+                    poly.draw();
+                    ofFill();
+                }
+                break;
+                }
+
+                radius *= 0.8f;
+                if (radius < 1.0f) break;
+            }
+        }
+    }
+}
+
+//--------------------------------------------------------------
+void ofApp::drawCloudCA() {
+
+    int rows = caRows;
+    int cols = caCols;
+    if (rows <= 0 || cols <= 0) return;
+
+    for (int y = 0; y < rows; ++y) {
+        for (int x = 0; x < cols; ++x) {
+
+            int v = cloudCA[y][x];
+            if (v <= 0) continue;
+
+            float cx = x * cellSize + cellSize * 0.5f;
+            float cy = y * cellSize + cellSize * 0.5f;
+            float r  = cellSize * 0.20f;
+
+            int alpha = v * 60;
+            ofSetColor(255, 255, 255, alpha);
+            ofDrawCircle(cx, cy, r);
+        }
+    }
+}
+
+//--------------------------------------------------------------
+void ofApp::keyPressed(int key) {
+
+    bool changed = false;
+
+    if (key == '1') {
+        currentWeather = WEATHER_SUNNY;
+        changed = true;
+    }
+    else if (key == '2') {
+        currentWeather = WEATHER_CLOUDY;
+        changed = true;
+    }
+    else if (key == '3') {
+        currentWeather = WEATHER_RAINY;
+        changed = true;
+    }
+    else if (key == '4') {
+        currentWeather = WEATHER_SNOWY;
+        changed = true;
+    }
+    else if (key == '5') {
+        currentWeather = WEATHER_THUNDERSTORM;
+        changed = true;
+    }
+
+    if (changed) {
+        weatherChangeTimer = 0.0f;
+        generateFlowFieldForCurrentWeather();
+    }
+}
