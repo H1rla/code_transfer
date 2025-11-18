@@ -1,99 +1,80 @@
-//--------------------------------------------------------------
-void ofApp::update() {
+#pragma once
 
-    float dt = ofGetLastFrameTime();
+#include "ofMain.h"
+#include <vector>
 
-    // ============================================
-    // 1. 天候ごとの CA 更新スピード
-    // ============================================
-    switch (currentWeather) {
-    case WEATHER_SUNNY:
-        caUpdateInterval = 0.25f;
-        cloudUpdateInterval = 0.35f;
-        break;
+using std::vector;
 
-    case WEATHER_CLOUDY:
-        caUpdateInterval = 0.20f;
-        cloudUpdateInterval = 0.30f;
-        break;
+// 天気の種類
+enum WeatherType {
+    WEATHER_SUNNY = 0,
+    WEATHER_CLOUDY,
+    WEATHER_RAINY,
+    WEATHER_SNOWY,
+    WEATHER_THUNDERSTORM
+};
 
-    case WEATHER_RAINY:
-        caUpdateInterval = 0.14f;
-        cloudUpdateInterval = 0.24f;
-        break;
+class ofApp : public ofBaseApp {
+public:
+    void setup();
+    void update();
+    void draw();
+    void keyPressed(int key);
 
-    case WEATHER_SNOWY:
-        caUpdateInterval = 0.18f;
-        cloudUpdateInterval = 0.28f;
-        break;
+private:
+    // === 現在の天気 ===
+    WeatherType currentWeather;
 
-    case WEATHER_THUNDERSTORM:
-        caUpdateInterval = 0.10f;
-        cloudUpdateInterval = 0.20f;
-        break;
-    }
+    // === セルオートマトン共通 ===
+    int cellSize;
+    int caCols;
+    int caRows;
 
-    // ============================================
-    // 2. ベクトル場の時間（風の進み）
-    // ============================================
-    flowTime += dt;
+    // 天候 CA（主役）
+    vector<vector<int>> ca;      // 現在の生死
+    vector<vector<int>> caNext;  // 基本ルール用のバッファ
 
-    // ★ ベクトル場の時間ゆらぎがある場合（あなたが入れた関数）
-    updateFlowFieldOverTime();
+    // HP（勝者レベルとして扱う） 0〜maxHP
+    vector<vector<int>> caHP;
+    int maxHP;
 
+    float caUpdateInterval;
+    float caTimer;
 
-    // ============================================
-    // 3. 天気 CA（天候模様）の更新
-    // ============================================
-    caTimer += dt;
-    if (caTimer >= caUpdateInterval) {
-        updateCA();
-        caTimer = 0.0f;
-    }
+    // === 雲 CA（残像的な雲表現） ===
+    vector<vector<int>> cloudCA;     // 小さな残光
+    float cloudUpdateInterval;
+    float cloudTimer;
 
-    // ============================================
-    // 4. 雲 CA の更新
-    // ============================================
-    cloudTimer += dt;
-    if (cloudTimer >= cloudUpdateInterval) {
-        updateCloudCA();
-        cloudTimer = 0.0f;
-    }
+    // === ベクトル場（天候による風の向き） ===
+    vector<vector<ofVec2f>> flowField;
+    float flowTime; // 今回は主にノイズ時間として使用
 
+    // === 天候の周期的切り替え（テスト用） ===
+    float weatherChangeTimer;
+    float weatherChangeInterval; // 例: 10秒ごとに変更
 
-    // ==========================================================
-    // 5. ★ 試験的：一定周期で天候を切り替える（晴→曇→雨→雪→雷→晴）
-    // ==========================================================
-    weatherChangeTimer += dt;
-    if (weatherChangeTimer >= weatherChangeInterval) {
+    // ---------- 内部関数 ----------
 
-        weatherChangeTimer = 0.0f;
+    // CA 初期化
+    void randomizeCA();
 
-        switch (currentWeather) {
-        case WEATHER_SUNNY:
-            currentWeather = WEATHER_CLOUDY;
-            break;
-        case WEATHER_CLOUDY:
-            currentWeather = WEATHER_RAINY;
-            break;
-        case WEATHER_RAINY:
-            currentWeather = WEATHER_SNOWY;
-            break;
-        case WEATHER_SNOWY:
-            currentWeather = WEATHER_THUNDERSTORM;
-            break;
-        case WEATHER_THUNDERSTORM:
-            currentWeather = WEATHER_SUNNY;
-            break;
-        }
+    // 天候 CA の更新（Game of Life + ベクトル場 + 勝者ルール + HP制）
+    void updateCA();
 
-        // ★ 天候が変わったのでベクトル場を再生成
-        generateFlowFieldForCurrentWeather();
-    }
+    // 雲 CA の更新（シンプルな残像）
+    void updateCloudCA();
 
+    // 描画
+    void drawCA();
+    void drawCloudCA();
 
-    // ==========================================================
-    // 6. ★ カオスによる天候変化は OFF（試験のため）
-    // ==========================================================
-    // updateWeatherByChaos();    // ← 試験中はコメントアウト
-}
+    // ベクトル場生成（モデルC：天候方向 + ノイズ揺らぎ）
+    void generateFlowFieldForCurrentWeather();
+
+    // （将来用：時間によるベクトル場の変化。今回は中身は空でもOK）
+    void updateFlowFieldOverTime();
+
+    // グリッド座標 (gx, gy) に対して、flowField から整数方向 (dx, dy) を得る
+    void getFlowDirForCell(int gx, int gy, int& dx, int& dy);
+};
