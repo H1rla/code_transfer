@@ -1,99 +1,4 @@
-//--------------------------------------------------------------
-void ofApp::updateCA() {
-
-    int rows = caRows;
-    int cols = caCols;
-    if (rows <= 0 || cols <= 0) return;
-
-    // 念のためバッファ・HPのサイズをチェック
-    if ((int)caNext.size() != rows || (int)caNext[0].size() != cols) {
-        caNext.assign(rows, vector<int>(cols, 0));
-    }
-    if ((int)caHP.size() != rows || (int)caHP[0].size() != cols) {
-        caHP.assign(rows, vector<int>(cols, 0));
-    }
-
-    // ---------- 1. B3/S23 基本ルール ----------
-    for (int y = 0; y < rows; ++y) {
-        for (int x = 0; x < cols; ++x) {
-
-            int aliveNeighbors = 0;
-
-            for (int j = -1; j <= 1; ++j) {
-                for (int i = -1; i <= 1; ++i) {
-                    if (i == 0 && j == 0) continue;
-
-                    int nx = (x + i + cols) % cols;
-                    int ny = (y + j + rows) % rows;
-
-                    aliveNeighbors += ca[ny][nx];
-                }
-            }
-
-            int current   = ca[y][x];
-            int nextState = 0;
-
-            if (current == 1) {
-                if (aliveNeighbors == 2 || aliveNeighbors == 3) {
-                    nextState = 1;
-                } else {
-                    nextState = 0;
-                }
-            } else {
-                if (aliveNeighbors == 3) {
-                    nextState = 1;
-                } else {
-                    nextState = 0;
-                }
-            }
-
-            // 完全な死滅防止用のノイズ（ごく少量）
-            if (nextState == 0 && aliveNeighbors == 0) {
-                if (ofRandom(1.0f) < 0.001f) {
-                    nextState = 1;
-                }
-            }
-
-            caNext[y][x] = nextState;
-        }
-    }
-
-    // ---------- 2. ベクトル場 + 勝者ルール(50%) + HP 制 ----------
-    vector<vector<int>> moved(rows, vector<int>(cols, 0));
-    vector<vector<int>> newHP(rows, vector<int>(cols, 0));
-
-    for (int y = 0; y < rows; ++y) {
-        for (int x = 0; x < cols; ++x) {
-
-            if (caNext[y][x] != 1) continue;
-
-            int dx = 0, dy = 0;
-            getFlowDirForCell(x, y, dx, dy);
-
-            int tx = (x + dx + cols) % cols;
-            int ty = (y + dy + rows) % rows;
-
-            int oldHP = caHP[y][x];
-            if (oldHP <= 0) oldHP = 1;
-
-            if (moved[ty][tx] == 0) {
-                // 単独 → 勝利
-                moved[ty][tx] = 1;
-                newHP[ty][tx] = std::min(oldHP + 1, maxHP);
-            } else {
-                // 競合 → 50%で新セルが勝つ
-                if (ofRandom(1.0f) < 0.5f) {
-                    moved[ty][tx] = 1;
-                    newHP[ty][tx] = std::min(oldHP + 1, maxHP);
-                } else {
-                    // 元の勝者を少し強化
-                    newHP[ty][tx] = std::min(newHP[ty][tx] + 1, maxHP);
-                }
-            }
-        }
-    }
-
-    // ---------- 3. スカスカ領域に「塊」でカオス生成 ----------
+    // ---------- 3. スカスカ領域に「ランダムな塊」でカオス生成 ----------
     int aliveCount = 0;
     for (int y = 0; y < rows; ++y) {
         for (int x = 0; x < cols; ++x) {
@@ -105,33 +10,51 @@ void ofApp::updateCA() {
     int minAlive   = static_cast<int>(totalCells * 0.02f); // 2% 以下ならほぼ壊滅
 
     if (aliveCount < minAlive) {
-        // ofNoise を使って「クラスター数」をカオスっぽく決める
+        // クラスター数もランダム
+        int clusterCount = static_cast<int>(ofRandom(2, 7)); // 2〜6個
+
         float t = ofGetElapsedTimef();
-        float n = ofNoise(t * 0.7f);
-        int clusterCount = ofMap(n, 0.0f, 1.0f, 2, 6, true);  // 2〜6個
 
         for (int c = 0; c < clusterCount; ++c) {
 
-            // クラスターの中心
+            // クラスター中心をランダムに
             int cx = static_cast<int>(ofRandom(cols));
             int cy = static_cast<int>(ofRandom(rows));
 
-            // クラスター半径（セル単位） 2〜4
-            int radius = static_cast<int>(ofRandom(2, 5)); // 2,3,4
+            // 半径もクラスターごとにランダム 2〜5
+            int radius = static_cast<int>(ofRandom(2, 6));
 
             for (int dy = -radius; dy <= radius; ++dy) {
                 for (int dx = -radius; dx <= radius; ++dx) {
 
-                    if (dx*dx + dy*dy > radius*radius) continue; // 円形クラスター
-
                     int tx = (cx + dx + cols) % cols;
                     int ty = (cy + dy + rows) % rows;
 
-                    moved[ty][tx] = 1;
+                    // 距離が radius 以内だけ候補
+                    float dist2 = dx * dx + dy * dy;
+                    if (dist2 > radius * radius) continue;
 
-                    // HP は 2〜maxHP のどこか（既存より強くする）
-                    int seedHP = static_cast<int>(ofRandom(2, maxHP + 1));
-                    newHP[ty][tx] = std::max(newHP[ty][tx], seedHP);
+                    float dist = sqrtf(dist2);
+
+                    // 中心に近いほど「生まれやすい」
+                    float baseProb = ofMap(dist,
+                                           0.0f, (float)radius,
+                                           1.0f, 0.3f, true);
+
+                    // さらにノイズでバラつき（塊の形を崩す）
+                    float noiseVal = ofNoise(tx * 0.2f, ty * 0.2f, t * 0.8f);
+                    float noiseFactor = ofMap(noiseVal, 0.0f, 1.0f,
+                                              0.6f, 1.4f, true);
+
+                    float spawnProb = baseProb * noiseFactor;
+
+                    if (ofRandom(1.0f) < spawnProb) {
+                        moved[ty][tx] = 1;
+
+                        // HP は 2〜maxHP のどこか（強めの勢力として出現）
+                        int seedHP = static_cast<int>(ofRandom(2, maxHP + 1));
+                        newHP[ty][tx] = std::max(newHP[ty][tx], seedHP);
+                    }
                 }
             }
         }
@@ -140,4 +63,3 @@ void ofApp::updateCA() {
     // ---------- 4. 確定 ----------
     ca   = moved;
     caHP = newHP;
-}
