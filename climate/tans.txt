@@ -1,120 +1,59 @@
-#pragma once
-
-#include "ofMain.h"
-using std::vector;
-
-// === 天気の種類 ===
-enum WeatherType {
-    WEATHER_SUNNY,
-    WEATHER_CLOUDY,
-    WEATHER_RAINY,
-    WEATHER_SNOWY,
-    WEATHER_THUNDERSTORM,
-};
-
-class ofApp : public ofBaseApp {
-public:
-    void setup();
-    void update();
-    void draw();
-    void keyPressed(int key);
-
-private:
-    // =============================
-    //  天気・環境
-    // =============================
-    WeatherType currentWeather;
-
-    // =============================
-    //  基本 CA グリッドパラメータ
-    // =============================
-    int cellSize;
-    int caCols;
-    int caRows;
-
-    // =============================
-    //  天気用セルオートマトン
-    // =============================
-    vector<vector<int>>  ca;
-    vector<vector<int>>  caNext;
-
-    // ★ 各セルの強さ（勝者ルール用）
-    vector<vector<float>> caStrength;
-
-    float caUpdateInterval;
-    float caTimer;
-
-    void randomizeCA();
-    void updateCA();  // 勝者ルール＋カオス生成を含む
-    void drawCA();
+//--------------------------------------------------------------
+// ★ ベクトル場の時間変化パラメータ（追加）
+float flowUpdateTimer = 0.0f;
+float flowUpdateInterval = 1.5f;   // 毎1.5秒に1回、方向を再決定
 
 
-    // =============================
-    //  雲 用 CA
-    // =============================
-    vector<vector<int>>  cloudCA;
-    vector<vector<int>>  cloudNext;
 
-    float cloudUpdateInterval;
-    float cloudTimer;
-
-    void updateCloudCA();
-    void drawCloudCA();
+void updateFlowFieldOverTime();
 
 
-    // =============================
-    //  ベクトル場（天候による風）
-    // =============================
-    vector<vector<ofVec2f>> flowField;
-    float flowTime;
 
-    void generateFlowFieldForCurrentWeather();
-    void getFlowDirForCell(int gx, int gy, int& dx, int& dy);
+//--------------------------------------------------------------
+// ★ ベクトル場を時間で揺らがせる（差分追加）
+//    元の bandVel の方向は維持しつつ、少しだけランダムに回転させる方式
+void ofApp::updateFlowFieldOverTime() {
 
+    flowUpdateTimer += ofGetLastFrameTime();
+    if (flowUpdateTimer < flowUpdateInterval) return;
 
-    // =============================
-    //  カオス天気制御
-    // =============================
-    double chaosX;      // ロジスティック写像（0〜1）
-    double chaosR;      // カオスパラメータ（3.8〜4.0）
-    float  weatherTimer;
-    float  weatherBaseMin;
-    float  weatherBaseMax;
+    flowUpdateTimer = 0.0f;
 
-    void stepChaos();
-    void updateWeatherByChaos();
-    void applyWeatherStep(int step, bool forceThunder);
+    float angleJitter = ofRandom(-8.0f, 8.0f);  // 8度だけランダム揺らぎ
 
+    float rad = ofDegToRad(angleJitter);
 
-    // =============================
-    //  雲の量子ブロブ
-    // =============================
-    void drawCloudBlob(float cx, float cy,
-        float baseR,
-        const ofColor& baseColor,
-        float seed);
+    float cs = cos(rad);
+    float sn = sin(rad);
 
-    void drawNoisyPolygon(float cx, float cy,
-        float baseRadius,
-        int sides,
-        float rotationRad,
-        float noiseScale,
-        float noiseAmp,
-        float seed,
-        float time);
+    for (int y = 0; y < caRows; y++) {
+        for (int x = 0; x < caCols; x++) {
+
+            ofVec2f v = flowField[y][x];
+
+            // 速度0（晴れ）の場合はスキップ
+            if (v.lengthSquared() < 0.01f) continue;
+
+            float nx = v.x * cs - v.y * sn;
+            float ny = v.x * sn + v.y * cs;
+
+            flowField[y][x].set(nx, ny);
+        }
+    }
+}
 
 
-    // =============================
-    //  勝者ルール用パラメータ
-    // =============================
-    float strengthGrowth;            // 勝てば強くなる増加量
-    float strengthDecay;             // 時間による減衰
-    float chaosClusterBaseStrength;  // カオスクラスタ初期強さ
+
+// === ベクトル場の時間（風の進み）はそのまま
+flowTime += dt;
 
 
-    // =============================
-    //  カオスクラスタ生成（新しい勢力）
-    // =============================
-    void spawnChaosClustersByChaos(vector<vector<int>>& movedGrid);
-    void spawnClusterAt(int cx, int cy, vector<vector<int>>& movedGrid);
-};
+updateFlowFieldOverTime();   // ★ ベクトル場を時間変化させる
+
+
+float cx = baseX + v.x * flowTime;
+float cy = baseY + v.y * flowTime;
+
+
+
+
